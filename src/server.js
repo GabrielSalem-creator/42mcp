@@ -246,11 +246,20 @@ app.post('/api/vm/proxy', async (req, res) => {
 
 // Real-time browser screenshot (fast JPEG via agent-browser)
 app.post('/api/browser/screenshot', async (req, res) => {
-  const { url } = req.body;
+  const { url, ensure, connectionId } = req.body || {};
   const vmsh = require('./vmShell');
   try {
-    if (url) { await vmsh.open(url); await vmsh.sleep(1500); }
-    const screen = await vmsh.getScreen(req.body.quality || 55);
+    if (url) {
+      await vmsh.open(url); await vmsh.sleep(1500);
+    } else if (ensure) {
+      // Never show about:blank — make sure the real site/login page is loaded.
+      const cur = (await vmsh.getUrl()) || '';
+      if (!cur || /^(about:blank|chrome:|data:)/i.test(cur)) {
+        const conn = (connectionId && connections.get(connectionId)) || connections.getActive();
+        if (conn) { await vmsh.open(conn.loginUrl || conn.url); await vmsh.sleep(1800); }
+      }
+    }
+    const screen = await vmsh.getScreen();
     res.json(screen);
   } catch (err) {
     res.status(500).json({ error: err.message });

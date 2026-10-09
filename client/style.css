@@ -153,6 +153,9 @@ body {
 .live__load { position: absolute; color: var(--faint); font-size: .82rem; display: flex; align-items: center; gap: .5rem; }
 .live__load::before { content: ''; width: 16px; height: 16px; border: 2px solid var(--border-2); border-top-color: var(--brand-2); border-radius: 50%; animation: spin .8s linear infinite; }
 .live__hint { font-size: .74rem; color: var(--faint); padding: .5rem .6rem; margin: 0; }
+.live--click { border-color: var(--brand); box-shadow: 0 0 0 2px rgba(109,94,252,.25); }
+.live--click .live__img { cursor: crosshair; }
+.live--click .live__hint { color: var(--brand-2); }
 
 /* quick chips under an AI message */
 .qchips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }

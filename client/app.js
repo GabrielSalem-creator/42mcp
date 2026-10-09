@@ -264,6 +264,7 @@ const STEP_TITLE = {
   credentials: 'Sign in',
   code: 'Enter your verification code',
   push: 'Approve on your device',
+  captcha: 'Solve the human check',
   input: 'Continue signing in',
   other: 'Sign in',
   signup: 'Sign in'
@@ -293,17 +294,27 @@ function renderAuthStep(step) {
     .map((b) => `<button type="button" class="btn btn--ghost btn--sm actbtn" data-ref="${esc(b.ref)}">${esc(b.label)}</button>`).join('');
   const ssoHtml = sso.map((s) => `<button class="btn btn--ghost btn--block sso__btn" data-ref="${esc(s.ref)}">${esc(s.label)}</button>`).join('');
 
+  const isCaptcha = step.step === 'captcha';
+  let body;
+  if (isCaptcha) {
+    body = `<p class="lform__msg">🤖 This site wants you to solve a quick human check. Tap directly on the challenge below to solve it — just clicking, no typing. When it clears, tap “I solved it”.</p>
+      <div class="lform__actions"><button type="button" class="btn checkbtn">I solved it</button></div>`;
+  } else if (fields.length) {
+    body = `<form class="lform">${fieldsHtml}
+      <div class="lform__actions"><button type="submit" class="btn">${step.step === 'code' ? 'Verify' : 'Continue'}</button><button type="button" class="btn btn--ghost" data-act="screen">👁 Show the page</button></div>
+      <p class="lform__note">🔒 Goes straight into your browser. Never stored.</p></form>`;
+  } else {
+    body = `<p class="lform__msg">I am watching the site and will keep going. ${step.step === 'push' ? 'Approve the request on your device, then tap below.' : 'If it needs anything from you, I will ask here.'}</p>
+      <div class="lform__actions">
+        <button type="button" class="btn checkbtn">${step.step === 'push' ? 'I approved it' : 'Check again'}</button>
+        <button type="button" class="btn btn--ghost" data-act="screen">👁 Show the page</button>
+      </div>`;
+  }
+
   bubble.innerHTML = `
     <p class="card-title">${esc(title)} · ${esc(state.conn.domain)}</p>
     ${msgHtml}${codeHtml}
-    ${fields.length ? `<form class="lform">${fieldsHtml}
-      <div class="lform__actions"><button type="submit" class="btn">${step.step === 'code' ? 'Verify' : 'Continue'}</button><button type="button" class="btn btn--ghost" data-act="screen">👁 Show the page</button></div>
-      <p class="lform__note">🔒 Goes straight into your browser. Never stored.</p></form>`
-      : `<p class="lform__msg">I am watching the site and will keep going. ${step.step === 'push' ? 'Approve the request on your device, then tap below.' : 'If it needs anything from you, I will ask here.'}</p>
-         <div class="lform__actions">
-          <button type="button" class="btn checkbtn">${step.step === 'push' ? 'I approved it' : 'Check again'}</button>
-          <button type="button" class="btn btn--ghost" data-act="screen">👁 Show the page</button>
-        </div>`}
+    ${body}
     ${actionHtml ? `<div class="lform__actions">${actionHtml}</div>` : ''}
     ${ssoHtml ? `<div class="sso">${ssoHtml}</div>` : ''}`;
 
@@ -313,6 +324,7 @@ function renderAuthStep(step) {
   bubble.querySelectorAll('.sso__btn').forEach((b) => b.addEventListener('click', () => ssoClick(b.dataset.ref)));
   bubble.querySelectorAll('.actbtn').forEach((b) => b.addEventListener('click', () => authButton(b.dataset.ref)));
   bubble.querySelectorAll('.checkbtn').forEach((b) => b.addEventListener('click', recheckAuth));
+  if (isCaptcha) embedLiveScreen(bubble, true);   // auto-show a CLICKABLE screen to solve it
   if (step.step === 'push') startPushPoll();
 }
 
@@ -380,28 +392,38 @@ function onConnected() {
   showCreds(true);
 }
 
-/* ---------------- read-only page preview (just shows what's happening) ---------------- */
-function embedLiveScreen(bubble) {
+/* ---------------- page preview (read-only, or clickable for CAPTCHAs) ---------------- */
+function embedLiveScreen(bubble, clickable) {
   if (bubble.querySelector('.live')) return;
   const div = document.createElement('div');
-  div.className = 'live';
+  div.className = 'live' + (clickable ? ' live--click' : '');
   div.innerHTML = `
-    <div class="live__frame"><img class="live__img" alt="page preview"><div class="live__load" >Loading preview…</div></div>
-    <p class="live__hint">👁 Read-only preview of the site. You don't need to touch it — just use the fields above.</p>`;
+    <div class="live__frame"><img class="live__img" alt="page preview"><div class="live__load">Loading the site…</div></div>
+    <p class="live__hint">${clickable ? '👆 Tap directly on the challenge to solve it. Clicking only — no typing.' : '👁 Live preview of the site. You don’t need to touch it — use the fields above.'}</p>`;
   bubble.appendChild(div);
   const img = div.querySelector('.live__img');
+  if (clickable) { img.style.cursor = 'crosshair'; img.addEventListener('click', (e) => captchaClick(e, img)); }
   refreshLive(img, div.querySelector('.live__load'));
   stopLive();
-  state.liveTimer = setInterval(() => refreshLive(img, div.querySelector('.live__load')), 4000);
+  state.liveTimer = setInterval(() => refreshLive(img, div.querySelector('.live__load')), clickable ? 2500 : 4000);
   scrollDown();
 }
 function stopLive() { if (state.liveTimer) { clearInterval(state.liveTimer); state.liveTimer = null; } }
 async function refreshLive(img, loadEl) {
   try {
-    const d = await api('/api/browser/screenshot', { method: 'POST', body: '{}' });
+    // Ask for the ACTIVE connection's page so it shows the real site, never about:blank.
+    const d = await api('/api/browser/screenshot', { method: 'POST', body: JSON.stringify({ connectionId: state.conn && state.conn.id, ensure: true }) });
     if (d.screenshot) { img.src = `data:image/jpeg;base64,${d.screenshot}`; img.style.display = 'block'; if (loadEl) loadEl.style.display = 'none'; }
-    else if (loadEl) loadEl.textContent = 'No preview available.';
+    else if (loadEl) loadEl.textContent = 'No preview yet…';
   } catch (_) { if (loadEl) loadEl.textContent = 'Preview unavailable.'; }
+}
+async function captchaClick(e, img) {
+  const r = img.getBoundingClientRect();
+  const x = Math.round((e.clientX - r.left) / r.width * img.naturalWidth);
+  const y = Math.round((e.clientY - r.top) / r.height * img.naturalHeight);
+  if (!isFinite(x) || x < 0) return;
+  try { const d = await api('/api/browser/input', { method: 'POST', body: JSON.stringify({ action: 'click', x, y }) }); if (d.screenshot) img.src = `data:image/jpeg;base64,${d.screenshot}`; }
+  catch (_) {}
 }
 
 /* ---------------- creds in chat ---------------- */

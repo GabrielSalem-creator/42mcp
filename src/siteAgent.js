@@ -258,6 +258,7 @@ Decide the state:
 - "credentials": the page asks for identity and/or secret. This includes: email-only first step (e.g. Google, Microsoft), username+password, phone+password, password-only second step.
 - "code": the page asks for a verification / one-time / 2FA / authenticator / SMS / email code. Put the input(s) in fields with type "otp".
 - "push": the page is waiting for the user to approve on another device, OR it DISPLAYS a number for the user to tap/match on their phone (e.g. GitHub Mobile, Microsoft Authenticator). There is usually no input to type. Put any displayed number(s) in codesShown.
+- "captcha": the page shows a CAPTCHA / bot-check / "I'm not a robot" / image or puzzle challenge / "verify you are human" / "press and hold" / reCAPTCHA / hCaptcha / Arkose / slider. The user must SOLVE it by clicking — there is nothing to type. Set step "captcha".
 - "input": any other step that needs typed input (security question, recovery email, etc.).
 
 Field rules (very important):
@@ -274,7 +275,7 @@ Also report:
 - "codesShown": any SHORT number/code the PAGE ITSELF DISPLAYS for the user to confirm on a device. Do NOT put the user's input here.
 
 Return STRICT JSON ONLY — no markdown, no commentary:
-{"authenticated":bool,"signup":bool,"step":"credentials|code|push|input|done","instruction":"...","fields":[{"ref":"e#","label":"...","type":"username|email|password|otp|tel|text"}],"buttons":[{"ref":"e#","label":"..."}],"methods":[{"ref":"e#","label":"..."}],"codesShown":["..."]}`;
+{"authenticated":bool,"signup":bool,"step":"credentials|code|push|captcha|input|done","instruction":"...","fields":[{"ref":"e#","label":"...","type":"username|email|password|otp|tel|text"}],"buttons":[{"ref":"e#","label":"..."}],"methods":[{"ref":"e#","label":"..."}],"codesShown":["..."]}`;
 
 async function analyzeAuthWithLLM(snapshot, url, title) {
   const user = `URL: ${url}\nPAGE TITLE: ${title}\n\nACCESSIBILITY TREE (the current page):\n${String(snapshot).slice(0, 6500)}`;
@@ -313,7 +314,7 @@ async function detectAuthStep(conn) {
           buttons: (j.buttons || []).filter((b) => b && b.ref),
           hasPassword: fields.some((f) => f.type === 'password'),
           hasOtp: fields.some((f) => f.type === 'otp'),
-          analyzedBy: 'llm'
+          analyzedBy: lastAnalysisBackend
         };
       }
     } catch (e) { /* fall through to heuristic */ }
@@ -468,13 +469,15 @@ async function cliComplete(prompt, timeoutMs = 30000) {
  * Best available completion for page-understanding tasks: a configured local
  * reasoning CLI first (highest quality), else the hosted model. Returns raw text.
  */
+let lastAnalysisBackend = 'none';
 async function analysisComplete(system, user, timeoutMs = 30000, maxTokens = 700) {
   if (config.analysisCliBin) {
     try {
       const out = await cliComplete(`${system}\n\n${user}`, timeoutMs);
-      if (out && /[\{\[]/.test(out)) return out;
+      if (out && /[\{\[]/.test(out)) { lastAnalysisBackend = 'cli'; return out; }
     } catch (_) { /* fall back */ }
   }
+  lastAnalysisBackend = 'model';
   return llmComplete([{ role: 'system', content: system }, { role: 'user', content: user }], Math.min(timeoutMs, 25000), maxTokens);
 }
 
