@@ -127,9 +127,11 @@ async function detectLoginForm(conn) {
 
   const fields = [];
   const ssoButtons = [];
+  const SKIP = /(language|country|region|locale|timezone|currency|search|cookie|newsletter|captcha|change language)/i;
   for (const e of els) {
     const n = e.name.toLowerCase();
     if (/textbox|combobox/.test(e.role)) {
+      if (SKIP.test(n)) continue;
       let type = 'text', id = e.ref;
       if (/verification|security|confirmation|one.?time|2fa|two.?factor|\bcode\b|passcode|digit/.test(n)) type = 'otp';
       else if (/password|passcode|\bpin\b/.test(n)) type = 'password';
@@ -176,9 +178,34 @@ function extractAuthText(snap) {
 }
 
 /**
+ * LLM reads the full page (accessibility tree ≈ meaningful HTML) and decides what
+ * the current sign-in step is and exactly what to show — works for ANY site.
+ */
+async function analyzeAuthWithLLM(snapshot, url, title) {
+  const sys = `You read a web page's accessibility tree to drive a SIGN-IN flow (never sign-up).
+Interactive elements appear with a ref like [ref=e12]. Return STRICT JSON only (no prose, no markdown):
+{
+ "authenticated": boolean,  // true only if this is a logged-in account view (sign-out / profile / dashboard present, no login form)
+ "signup": boolean,         // true if this is a registration / create-account page
+ "step": "credentials" | "code" | "push" | "input" | "done",
+ "instruction": string,     // one short sentence: exactly what the site is asking the user to do right now
+ "fields": [{"ref":"e#","label":"<visible label>","type":"username|email|password|otp|tel|text"}],
+ "buttons": [{"ref":"e#","label":"<text>"}],   // submit/verify/continue/next/resend/approve
+ "methods": [{"ref":"e#","label":"<text>"}],   // alternative sign-in methods: continue with google/apple/microsoft/passkey/email link
+ "codesShown": ["<number>"]  // short number/code the PAGE DISPLAYS for the user to confirm on a device (e.g. GitHub device match)
+}
+Rules: include in "fields" ONLY real credential/verification inputs the user must type now; never include language, country, region, search, cookie or newsletter inputs. If only an email/identifier is requested first (e.g. Google), return just that one field with step "credentials".`;
+  const user = `URL: ${url}\nTitle: ${title}\n\nAccessibility tree:\n${String(snapshot).slice(0, 6500)}`;
+  const out = await llmComplete([{ role: 'system', content: sys }, { role: 'user', content: user }], 25000, 600);
+  const m = out.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  const j = JSON.parse(m[0]);
+  return j;
+}
+
+/**
  * Read whatever auth step the site is CURRENTLY showing and describe it for the
- * chat: step type, the site's own instruction text, any number it displays to
- * match on a device, the exact input(s) to fill, and the action buttons.
+ * chat. Uses the LLM to understand the whole page, with a heuristic fallback.
  */
 async function detectAuthStep(conn) {
   const url = await vm.getUrl();
@@ -187,6 +214,34 @@ async function detectAuthStep(conn) {
   const full = await vm.snapshot({ interactive: false, compact: true });
   const els = parseSnapshot(interactive);
   const { messages, codes } = extractAuthText(full);
+
+  // Primary: let the model read the full page and decide.
+  if (config.artbloomApiKey) {
+    try {
+      const j = await analyzeAuthWithLLM(interactive, url, title);
+      if (j && (j.authenticated || j.signup || (Array.isArray(j.fields)) )) {
+        const fields = (j.fields || [])
+          .filter((f) => f && f.ref)
+          .map((f) => ({ ref: f.ref, id: f.ref, label: f.label || f.type || 'Field', type: f.type || 'text' }));
+        const step = j.authenticated ? 'done' : (j.signup ? 'signup' : (j.step || (fields.length ? 'credentials' : 'other')));
+        return {
+          step,
+          authenticated: !!j.authenticated,
+          url, title,
+          messages: j.instruction ? [j.instruction] : messages,
+          codesShown: (j.codesShown && j.codesShown.length ? j.codesShown : codes),
+          fields,
+          ssoButtons: (j.methods || []).filter((m) => m && m.ref),
+          buttons: (j.buttons || []).filter((b) => b && b.ref),
+          hasPassword: fields.some((f) => f.type === 'password'),
+          hasOtp: fields.some((f) => f.type === 'otp'),
+          analyzedBy: 'llm'
+        };
+      }
+    } catch (e) {
+      // fall through to heuristic
+    }
+  }
 
   if (isAuthenticated(els, url, title)) {
     return { step: 'done', authenticated: true, url, title, messages, fields: [], buttons: [], codesShown: [] };
@@ -197,9 +252,12 @@ async function detectAuthStep(conn) {
 
   const fields = [];
   const sso = [];
+  // inputs that are never credentials — don't show them as login fields
+  const IRRELEVANT = /(language|country|region|locale|timezone|time zone|currency|search|cookie|newsletter|subscribe|promo|coupon|captcha|change language)/i;
   for (const e of els) {
     const n = e.name.toLowerCase();
     if (/textbox|combobox/.test(e.role)) {
+      if (IRRELEVANT.test(n)) continue;
       let type = 'text';
       if (/verification|security|confirmation|one.?time|2fa|two.?factor|\bcode\b|passcode|digit|authenticator|token/.test(n)) type = 'otp';
       else if (/password|passcode|\bpin\b/.test(n)) type = 'password';
@@ -238,22 +296,35 @@ async function detectAuthStep(conn) {
   };
 }
 
-/** Type the owner's own values into the detected fields and submit. Not stored. */
-async function fillLogin(conn, values = {}, submit = true) {
-  const form = await detectLoginForm(conn);
-  if (!form.ok) return form;
-  for (const f of form.fields) {
-    const v = values[f.id] ?? values[f.type] ?? values[f.ref];
-    if (v == null || v === '') continue;
-    await vm.agentBrowser(['fill', '@' + f.ref, String(v)], 15000);
+/**
+ * Fill the owner's own values into the fields they were shown (keyed by element
+ * ref from the last auth-step; still valid because the VM page hasn't changed),
+ * submit, and report the next step. Works for any site. Values are not stored.
+ */
+async function fillLogin(conn, input = [], submit = true) {
+  // Accept an ordered [{ref,value}] list (preferred) or a {ref:value} object.
+  const pairs = Array.isArray(input)
+    ? input.map((f) => [f.ref, f.value])
+    : Object.entries(input || {});
+  let filled = 0;
+  for (const [key, val] of pairs) {
+    if (val == null || val === '') continue;
+    const ref = String(key).replace(/[^a-zA-Z0-9]/g, '');
+    if (!/^e\d+$/.test(ref)) continue;
+    await vm.agentBrowser(['fill', '@' + ref, String(val)], 15000);
+    await vm.sleep(150);
+    filled++;
   }
-  if (submit && form.submitRef) {
-    await vm.agentBrowser(['click', '@' + form.submitRef], 15000);
+  if (submit) {
+    // Click the most likely submit/continue/verify control on the CURRENT page.
+    const els = parseSnapshot(await vm.snapshot());
+    const btn = els.find((e) => /button/.test(e.role) && /^(log ?in|sign ?in|continue|next|submit|verify|confirm|done)\b/i.test(e.name));
+    if (btn) await vm.agentBrowser(['click', '@' + btn.ref], 15000);
+    else await vm.agentBrowser(['press', 'Enter'], 12000);
     await vm.sleep(3500);
   }
-  // Report whatever the site shows next (code input, number to match, push, etc.)
   const next = await detectAuthStep(conn);
-  return { ok: true, submitted: Boolean(submit && form.submitRef), ...next, needsOtp: next.step === 'code' };
+  return { ok: true, submitted: Boolean(submit), filled, ...next, needsOtp: next.step === 'code' };
 }
 
 /** Click a named auth action (Verify / Resend / Approve) by ref, then re-read the step. */
@@ -279,7 +350,7 @@ const BRANDS = {
   whatsapp: 'web.whatsapp.com', telegram: 'web.telegram.org'
 };
 
-async function llmComplete(messages, timeoutMs = 20000) {
+async function llmComplete(messages, timeoutMs = 20000, maxTokens = 60) {
   const url = config.artbloomBaseUrl.replace(/\/$/, '') + '/chat/completions';
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -287,7 +358,7 @@ async function llmComplete(messages, timeoutMs = 20000) {
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.artbloomApiKey}` },
-      body: JSON.stringify({ model: config.artbloomModel, messages, temperature: 0, max_tokens: 60 }),
+      body: JSON.stringify({ model: config.artbloomModel, messages, temperature: 0, max_tokens: maxTokens }),
       signal: ctrl.signal
     });
     const t = await r.text();

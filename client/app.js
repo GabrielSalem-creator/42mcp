@@ -297,11 +297,12 @@ function renderAuthStep(step) {
     <p class="card-title">${esc(title)} · ${esc(state.conn.domain)}</p>
     ${msgHtml}${codeHtml}
     ${fields.length ? `<form class="lform">${fieldsHtml}
-      <div class="lform__actions"><button type="submit" class="btn">${step.step === 'code' ? 'Verify' : 'Continue'}</button><button type="button" class="btn btn--ghost" data-act="screen">Live screen</button></div>
+      <div class="lform__actions"><button type="submit" class="btn">${step.step === 'code' ? 'Verify' : 'Continue'}</button><button type="button" class="btn btn--ghost" data-act="screen">👁 Show the page</button></div>
       <p class="lform__note">🔒 Goes straight into your browser. Never stored.</p></form>`
-      : `<div class="lform__actions">
-          ${step.step === 'push' ? '<button type="button" class="btn checkbtn">I approved it</button>' : ''}
-          <button type="button" class="btn btn--ghost" data-act="screen">${step.step === 'push' ? 'Show live screen' : 'Sign in on the live screen'}</button>
+      : `<p class="lform__msg">I am watching the site and will keep going. ${step.step === 'push' ? 'Approve the request on your device, then tap below.' : 'If it needs anything from you, I will ask here.'}</p>
+         <div class="lform__actions">
+          <button type="button" class="btn checkbtn">${step.step === 'push' ? 'I approved it' : 'Check again'}</button>
+          <button type="button" class="btn btn--ghost" data-act="screen">👁 Show the page</button>
         </div>`}
     ${actionHtml ? `<div class="lform__actions">${actionHtml}</div>` : ''}
     ${ssoHtml ? `<div class="sso">${ssoHtml}</div>` : ''}`;
@@ -316,12 +317,13 @@ function renderAuthStep(step) {
 }
 
 async function submitLogin(formEl) {
-  const values = {};
-  formEl.querySelectorAll('input[data-fid]').forEach((i) => { if (i.value) values[i.dataset.fid] = i.value; });
+  // Ordered list so each value goes to its exact field ref (no key collisions).
+  const fields = [];
+  formEl.querySelectorAll('input[data-fid]').forEach((i) => { if (i.value) fields.push({ ref: i.dataset.fid, value: i.value }); });
   const btn = formEl.querySelector('button[type="submit"]'); if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
   addTyping();
   try {
-    const d = await api(`/api/connections/${state.conn.id}/login`, { method: 'POST', body: JSON.stringify({ values, submit: true }) });
+    const d = await api(`/api/connections/${state.conn.id}/login`, { method: 'POST', body: JSON.stringify({ fields, submit: true }) });
     removeTyping();
     if (d.authenticated) { onConnected(); return; }
     renderAuthStep(d);
@@ -359,10 +361,16 @@ function stopPushPoll() { if (pushPollTimer) { clearInterval(pushPollTimer); pus
 
 async function ssoClick(ref) {
   addTyping();
-  try { await api('/api/browser/input', { method: 'POST', body: JSON.stringify({ action: 'click', ref }) }); } catch (_) {}
-  removeTyping();
-  const bubble = addAI('Continue with the provider on the live screen, then tap “I’m signed in”.', { card: true });
-  embedLiveScreen(bubble, true);
+  try {
+    await api('/api/browser/input', { method: 'POST', body: JSON.stringify({ action: 'click', ref }) });
+    await new Promise((r) => setTimeout(r, 2500));
+    // Read the provider's page and render its sign-in right here in the chat.
+    const step = await api(`/api/connections/${state.conn.id}/auth-step`, { method: 'POST', body: '{}' });
+    removeTyping();
+    if (step.authenticated) { onConnected(); return; }
+    addAI('Continue with that provider — enter what it asks below.');
+    renderAuthStep(step);
+  } catch (e) { removeTyping(); addAI(`Couldn't open that method: ${esc(e.message)}`); }
 }
 
 function onConnected() {
@@ -372,50 +380,28 @@ function onConnected() {
   showCreds(true);
 }
 
-/* ---------------- live screen embedded in chat ---------------- */
-function embedLiveScreen(bubble, withConfirm) {
+/* ---------------- read-only page preview (just shows what's happening) ---------------- */
+function embedLiveScreen(bubble) {
   if (bubble.querySelector('.live')) return;
   const div = document.createElement('div');
   div.className = 'live';
   div.innerHTML = `
-    <img class="live__img" alt="live browser">
-    <div class="live__row"><input class="live__type" placeholder="Type into the page…"><button class="btn btn--sm live__enter">↵</button><button class="btn btn--sm btn--ghost live__done">I’m signed in</button></div>
-    <p class="live__hint">Tap the picture to click. Sign in here, then tap “I’m signed in”.</p>`;
+    <div class="live__frame"><img class="live__img" alt="page preview"><div class="live__load" >Loading preview…</div></div>
+    <p class="live__hint">👁 Read-only preview of the site. You don't need to touch it — just use the fields above.</p>`;
   bubble.appendChild(div);
   const img = div.querySelector('.live__img');
-  img.addEventListener('click', (e) => liveClick(e, img));
-  div.querySelector('.live__enter').addEventListener('click', () => sendLiveInput({ action: 'key', key: 'Return' }));
-  div.querySelector('.live__type').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value; e.target.value = ''; if (v) sendLiveInput({ action: 'type', text: v }); } });
-  div.querySelector('.live__done').addEventListener('click', verifyAfterManual);
-  refreshLive(img);
+  refreshLive(img, div.querySelector('.live__load'));
   stopLive();
-  state.liveTimer = setInterval(() => refreshLive(img), 4000);
+  state.liveTimer = setInterval(() => refreshLive(img, div.querySelector('.live__load')), 4000);
   scrollDown();
 }
 function stopLive() { if (state.liveTimer) { clearInterval(state.liveTimer); state.liveTimer = null; } }
-async function refreshLive(img) {
-  try { const d = await api('/api/browser/screenshot', { method: 'POST', body: '{}' }); if (d.screenshot) img.src = `data:image/jpeg;base64,${d.screenshot}`; } catch (_) {}
-}
-async function liveClick(e, img) {
-  const r = img.getBoundingClientRect();
-  const x = Math.round((e.clientX - r.left) / r.width * img.naturalWidth);
-  const y = Math.round((e.clientY - r.top) / r.height * img.naturalHeight);
-  if (!isFinite(x)) return;
-  await sendLiveInput({ action: 'click', x, y });
-}
-async function sendLiveInput(body) {
-  if (state.inputInFlight) return; state.inputInFlight = true;
-  try { const d = await api('/api/browser/input', { method: 'POST', body: JSON.stringify(body) }); const img = document.querySelector('.live__img'); if (img && d.screenshot) img.src = `data:image/jpeg;base64,${d.screenshot}`; }
-  catch (_) {} finally { state.inputInFlight = false; }
-}
-async function verifyAfterManual() {
-  addTyping();
+async function refreshLive(img, loadEl) {
   try {
-    const v = await api(`/api/connections/${state.conn.id}/verify`, { method: 'POST', body: '{}' });
-    removeTyping();
-    if (v.authenticated) onConnected();
-    else addAI("Not signed in yet — finish on the live screen, then tap “I’m signed in” again.");
-  } catch (e) { removeTyping(); addAI(esc(e.message)); }
+    const d = await api('/api/browser/screenshot', { method: 'POST', body: '{}' });
+    if (d.screenshot) { img.src = `data:image/jpeg;base64,${d.screenshot}`; img.style.display = 'block'; if (loadEl) loadEl.style.display = 'none'; }
+    else if (loadEl) loadEl.textContent = 'No preview available.';
+  } catch (_) { if (loadEl) loadEl.textContent = 'Preview unavailable.'; }
 }
 
 /* ---------------- creds in chat ---------------- */

@@ -547,9 +547,9 @@ app.post('/api/connections/:id/open-login', async (req, res) => {
 app.post('/api/connections/:id/login', async (req, res) => {
   const conn = connections.get(req.params.id);
   if (!conn) return res.status(404).json({ error: 'Connection not found.' });
-  const { values, submit = true } = req.body || {};
+  const { values, fields, submit = true } = req.body || {};
   try {
-    const out = await siteAgent.fillLogin(conn, values || {}, submit);
+    const out = await siteAgent.fillLogin(conn, fields || values || [], submit);
     if (out.authenticated) connections.setStatus(conn.id, 'connected');
     let screenshot = '';
     try { screenshot = await require('./vmShell').screenshotBase64(); } catch (_) {}
