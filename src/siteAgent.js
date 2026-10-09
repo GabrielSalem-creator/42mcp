@@ -12,6 +12,67 @@
 const vm = require('./vmShell');
 const config = require('./config');
 const connections = require('./connectionStore');
+const scraperEngine = require('./scraperEngine');
+const { parseIntent } = require('./intentParser');
+
+const IG_CLUSTERS = { mcgill: 'mcgillu', nasa: 'nasa', natgeo: 'natgeo' };
+
+/** Instagram: use the dedicated DOM extractor for real post/story URLs (fast, precise). */
+async function runInstagramInstruction(conn, instruction) {
+  // Fail fast if Instagram isn't actually signed in on this connection.
+  const login = await scraperEngine.verifyLogin('instagram').catch(() => ({ connected: false }));
+  if (!login.connected) {
+    return { ok: false, error: 'Instagram is not signed in on this connection. Open https://www.42mcp.tech, connect Instagram and sign in once, then retry. (No active Instagram session was found.)' };
+  }
+
+  const intent = parseIntent(instruction);
+  let targets = (intent.targets || []).map((t) => t.replace(/^@/, ''));
+  if (!targets.length) {
+    const stop = new Set(['give', 'me', 'the', 'my', 'get', 'stories', 'story', 'urls', 'url', 'posts', 'post', 'of', 'from', 'and', 'all', 'latest', 'on', 'instagram']);
+    const brand = (instruction.toLowerCase().match(/[a-z][a-z0-9_.]{2,}/g) || []).find((w) => !stop.has(w));
+    if (brand) targets = [brand];
+  }
+  if (!targets.length) return null; // let the generic loop handle vague asks
+  const wantStories = /stor(y|ies|ies')/i.test(instruction);
+
+  const results = [];
+  for (const raw of targets.slice(0, 2)) {
+    const t = (IG_CLUSTERS[raw.toLowerCase()] || raw).replace(/^mcgill$/i, 'mcgillu');
+    const prof = await scraperEngine.scrapeDirect({
+      platform: 'instagram', target: t, depth: 12,
+      dataTypes: ['text', 'images', 'videos', 'metrics']
+    }).catch(() => null);
+    if (!prof) continue;
+    if (prof.requiresLogin) {
+      return { ok: false, error: `Instagram isn't signed in on this connection. Open the site, sign in to Instagram, then retry.` };
+    }
+    let stories = [];
+    if (wantStories) {
+      const s = await scraperEngine.scrapeStoriesDirect({ target: t, maxStories: 20 }).catch(() => null);
+      stories = (s && s.items || []).map((i) => ({ type: 'story', url: i.postUrl || i.mediaUrl, media: i.mediaUrl }));
+    }
+    const posts = (prof.items || []).map((i) => ({
+      url: i.postUrl, type: i.type, caption: (i.caption || '').slice(0, 120), media: i.mediaUrl
+    })).filter((p) => p.url);
+    results.push({ account: t, profile: prof.profile && prof.profile.username, postCount: posts.length, posts, stories });
+  }
+  if (!results.length) return null;
+  const allPosts = results.flatMap((r) => r.posts);
+  const allStories = results.flatMap((r) => r.stories);
+  connections.recordRun(conn.id, { instruction, risk: 'read', steps: results.length });
+  return {
+    ok: true, risk: 'read',
+    result: {
+      accounts: results.map((r) => r.account),
+      totalPosts: allPosts.length,
+      totalStories: allStories.length,
+      postUrls: allPosts.map((p) => p.url),
+      storyUrls: allStories.map((s) => s.url),
+      posts: allPosts,
+      stories: allStories
+    }
+  };
+}
 
 const ROLE_RE = /^\s*-\s+([A-Za-z]+)/;
 
@@ -521,9 +582,62 @@ Rules:
  * Run a natural-language instruction against the connection. Returns
  * { ok, result, risk, steps, toolName }.
  */
+// Terse action-loop prompt for the local reasoning CLI controlling the browser.
+const CLI_CONTROL_PROMPT = (domain) => `You control a logged-in Chrome browser to do ONE task on ${domain}. Reply with ONLY ONE JSON action per turn, no prose:
+{"action":"navigate","url":"..."}
+{"action":"click","ref":"eN"}
+{"action":"fill","ref":"eN","text":"..."}
+{"action":"press","key":"Enter"}
+{"action":"scroll","direction":"down"}
+{"action":"read"}            // get page text when you need details
+{"action":"finish","result":<the answer as JSON>,"risk":"read|write"}
+Rules: refs (eN) come ONLY from the CURRENT PAGE shown. Use the fewest steps. Do not sign up or change account settings. For state-changing actions (send/post/delete/buy) set risk "write". When you have the answer, finish with the full result as structured JSON. Be concise.`;
+
+/** Claude (or configured CLI) drives the browser step by step. */
+async function runInstructionWithCli(conn, instruction, { maxSteps = 10 } = {}) {
+  await vm.open(conn.url); await vm.sleep(1500);
+  const sys = CLI_CONTROL_PROMPT(conn.domain);
+  const steps = [];
+  let last = '';
+  for (let i = 0; i < maxSteps; i++) {
+    const page = trimmed(await vm.snapshot());
+    const prompt = `${sys}\n\nTASK: ${instruction}\nSTEP ${i + 1}${last ? ` (last: ${last})` : ''}\nCURRENT PAGE:\n${page}\n\nNext action JSON:`;
+    let out;
+    try { out = await cliComplete(prompt, 35000); }
+    catch (e) { return { ok: false, error: 'controller error: ' + e.message, steps }; }
+    const m = out.match(/\{[\s\S]*\}/);
+    if (!m) { last = 'no action parsed'; continue; }
+    let a;
+    try { a = JSON.parse(m[0]); } catch (_) { last = 'bad json'; continue; }
+    if (a.action === 'finish' || a.done || a.result !== undefined) {
+      connections.recordRun(conn.id, { instruction, risk: a.risk || 'read', steps: steps.length });
+      return { ok: true, result: a.result ?? a.text ?? 'Done.', risk: a.risk || 'read', steps };
+    }
+    try { await runAction({ action: a.action, url: a.url, ref: a.ref, text: a.text, key: a.key, direction: a.direction || a.dir }); }
+    catch (e) { last = 'error: ' + e.message; continue; }
+    steps.push({ action: a.action, ref: a.ref, url: a.url });
+    last = a.action + (a.ref ? ' @' + a.ref : '') + (a.url ? ' ' + a.url : '');
+  }
+  return { ok: true, result: 'Reached step limit.', risk: 'read', steps, partial: true };
+}
+
 async function runInstruction(conn, instruction, { maxSteps = 12 } = {}) {
+  // Instagram → dedicated DOM extractor (real post/story URLs, fast).
+  if (/instagram\.com/i.test(conn.domain)) {
+    try {
+      const ig = await runInstagramInstruction(conn, instruction);
+      if (ig) return ig;
+    } catch (_) { /* fall through to generic */ }
+  }
+  // Prefer the local reasoning CLI (Claude) as the browser controller when configured.
+  if (config.analysisCliBin) {
+    try {
+      const out = await runInstructionWithCli(conn, instruction, { maxSteps: 10 });
+      if (out && (out.ok || out.error)) return out;
+    } catch (_) { /* fall back to hosted model loop */ }
+  }
   if (!config.artbloomApiKey) {
-    return { ok: false, error: 'No planner LLM configured (ARTBLOOM_API_KEY).' };
+    return { ok: false, error: 'No planner LLM configured.' };
   }
   await vm.open(conn.url);
   await vm.sleep(1500);
