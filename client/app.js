@@ -203,10 +203,24 @@ function setBusy(b) {
 async function handleInput(text) {
   addUser(text);
   if (state.mode === 'ready') { runInstruction(text); return; }
-  // ask_site or await_login: treat as a site if it looks like one
+  // ask_site / await_login: a clear domain starts immediately…
   if (looksLikeSite(text)) { startSite(text); return; }
-  if (state.mode === 'await_login') { addAI("Finish signing in using the form above, or type a different website to switch."); return; }
-  addAI("That doesn't look like a website. Type a site like <b>instagram.com</b> or your portal's address.");
+  // …otherwise understand natural language ("connect my instagram", "mcp for my school portal")
+  setBusy(true); addTyping();
+  try {
+    const r = await api('/api/resolve-site', { method: 'POST', body: JSON.stringify({ text }) });
+    removeTyping();
+    if (r.ok && r.url) {
+      const dom = r.url.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+      addAI(`Got it — connecting <b>${esc(dom)}</b>.`);
+      startSite(r.url);
+    } else if (state.mode === 'await_login') {
+      addAI("Finish signing in above, or name another website to switch.");
+    } else {
+      addAI("Which website do you mean? Tell me the site or its address — e.g. “connect my Instagram” or <b>portal.myschool.edu</b>.");
+    }
+  } catch (e) { removeTyping(); addAI("I couldn't work out which site — try naming it, like <b>instagram.com</b>."); }
+  finally { setBusy(false); }
 }
 
 /* ---------------- connect a site ---------------- */

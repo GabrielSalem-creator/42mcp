@@ -263,6 +263,77 @@ async function clickAuthButton(conn, ref) {
   return detectAuthStep(conn);
 }
 
+// ---------- natural-language → website resolution ----------
+
+const BRANDS = {
+  instagram: 'instagram.com', insta: 'instagram.com', ig: 'instagram.com',
+  github: 'github.com', github: 'github.com',
+  twitter: 'x.com', x: 'x.com',
+  gmail: 'mail.google.com', googlemail: 'mail.google.com', google: 'google.com',
+  outlook: 'outlook.office.com', hotmail: 'outlook.live.com',
+  linkedin: 'linkedin.com', facebook: 'facebook.com', fb: 'facebook.com',
+  reddit: 'reddit.com', youtube: 'youtube.com', yt: 'youtube.com',
+  tiktok: 'tiktok.com', pinterest: 'pinterest.com', spotify: 'open.spotify.com',
+  notion: 'notion.so', slack: 'slack.com', discord: 'discord.com',
+  amazon: 'amazon.com', netflix: 'netflix.com', twitch: 'twitch.tv',
+  whatsapp: 'web.whatsapp.com', telegram: 'web.telegram.org'
+};
+
+async function llmComplete(messages, timeoutMs = 20000) {
+  const url = config.artbloomBaseUrl.replace(/\/$/, '') + '/chat/completions';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.artbloomApiKey}` },
+      body: JSON.stringify({ model: config.artbloomModel, messages, temperature: 0, max_tokens: 60 }),
+      signal: ctrl.signal
+    });
+    const t = await r.text();
+    if (!r.ok) throw new Error(`LLM ${r.status}`);
+    return (JSON.parse(t).choices?.[0]?.message?.content || '').trim();
+  } finally { clearTimeout(timer); }
+}
+
+/**
+ * Turn a free-text request ("connect my instagram", "mcp for my school portal
+ * example.edu") into a single website URL. Instant for known brands / explicit
+ * domains; falls back to the LLM for anything else.
+ */
+async function resolveSiteUrl(text) {
+  const raw = (text || '').trim();
+  if (!raw) return { ok: false, reason: 'empty' };
+
+  // 1. explicit URL / domain in the text
+  const domainMatch = raw.match(/\b((?:[a-z0-9-]+\.)+[a-z]{2,})(\/[^\s]*)?/i);
+  if (domainMatch && !/^(e\.g|i\.e)\./i.test(domainMatch[0])) {
+    return { ok: true, url: 'https://' + domainMatch[1].replace(/^www\./i, ''), source: 'domain' };
+  }
+  if (raw.startsWith('@')) return { ok: true, url: `https://instagram.com/${raw.slice(1)}`, source: 'handle' };
+
+  // 2. known brand keyword
+  const words = raw.toLowerCase().match(/[a-z0-9]+/g) || [];
+  for (const w of words) {
+    if (BRANDS[w]) return { ok: true, url: 'https://' + BRANDS[w], source: 'brand', brand: w };
+  }
+
+  // 3. ask the fast model to name the site
+  try {
+    const out = await llmComplete([
+      { role: 'system', content: 'You map a user request to the ONE website they want to connect or automate. Reply with ONLY the root URL as https://domain.tld and nothing else. If you truly cannot tell which site, reply exactly UNKNOWN.' },
+      { role: 'user', content: raw }
+    ]);
+    const m = out.match(/https?:\/\/[^\s]+/i) || out.match(/\b((?:[a-z0-9-]+\.)+[a-z]{2,})/i);
+    if (m && !/unknown/i.test(out)) {
+      const u = m[0].startsWith('http') ? m[0] : 'https://' + m[0];
+      return { ok: true, url: u.replace(/\/$/, ''), source: 'llm' };
+    }
+  } catch (_) {}
+
+  return { ok: false, reason: 'unclear' };
+}
+
 // ---------- instruction execution (LLM action loop over agent-browser) ----------
 
 const ACTION_TOOLS = [
@@ -383,6 +454,7 @@ async function runInstruction(conn, instruction, { maxSteps = 12 } = {}) {
 }
 
 module.exports = {
+  resolveSiteUrl,
   verifySession,
   detectLoginForm,
   detectAuthStep,

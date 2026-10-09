@@ -474,6 +474,16 @@ app.get('/api/connections', (req, res) => {
   });
 });
 
+// Resolve a free-text request ("connect my instagram") to a website URL
+app.post('/api/resolve-site', async (req, res) => {
+  const { text } = req.body || {};
+  if (!text) return res.status(400).json({ ok: false, error: 'text required' });
+  try {
+    const r = await siteAgent.resolveSiteUrl(text);
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
 // Create a connection for a website
 app.post('/api/connections', (req, res) => {
   const { url, label } = req.body || {};
