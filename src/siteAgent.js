@@ -126,6 +126,12 @@ function isAuthenticated(elements, url, title) {
 
 /** Open the site and report whether the owner's session is active. */
 async function verifySession(conn) {
+  // For platforms with a known auth cookie, trust the cookie, not page heuristics.
+  if (/instagram\.com/i.test(conn.domain)) {
+    const login = await scraperEngine.verifyLogin('instagram').catch(() => ({ connected: false }));
+    connections.setStatus(conn.id, login.connected ? 'connected' : 'needs_auth');
+    return { authenticated: !!login.connected, url: conn.url, title: 'instagram' };
+  }
   await vm.open(conn.url);
   await vm.sleep(2500);
   const [url, title, snap] = await Promise.all([vm.getUrl(), vm.getTitle(), vm.snapshot()]);
@@ -286,15 +292,12 @@ async function detectAuthStep(conn) {
   const url = await vm.getUrl();
   const title = await vm.getTitle();
   const interactive = await vm.snapshot({ interactive: true });
-  const full = await vm.snapshot({ interactive: false, compact: true });
-  const els = parseSnapshot(interactive);
-  const { messages, codes } = extractAuthText(full);
 
-  // Primary: let the model read the full page and decide.
-  if (config.artbloomApiKey) {
+  // Primary: the model reads the current page and decides (one snapshot, one call).
+  if (config.analysisCliBin || config.artbloomApiKey) {
     try {
       const j = await analyzeAuthWithLLM(interactive, url, title);
-      if (j && (j.authenticated || j.signup || (Array.isArray(j.fields)) )) {
+      if (j && (j.authenticated || j.signup || Array.isArray(j.fields))) {
         const fields = (j.fields || [])
           .filter((f) => f && f.ref)
           .map((f) => ({ ref: f.ref, id: f.ref, label: f.label || f.type || 'Field', type: f.type || 'text' }));
@@ -303,8 +306,8 @@ async function detectAuthStep(conn) {
           step,
           authenticated: !!j.authenticated,
           url, title,
-          messages: j.instruction ? [j.instruction] : messages,
-          codesShown: (j.codesShown && j.codesShown.length ? j.codesShown : codes),
+          messages: j.instruction ? [j.instruction] : [],
+          codesShown: j.codesShown || [],
           fields,
           ssoButtons: (j.methods || []).filter((m) => m && m.ref),
           buttons: (j.buttons || []).filter((b) => b && b.ref),
@@ -313,10 +316,13 @@ async function detectAuthStep(conn) {
           analyzedBy: 'llm'
         };
       }
-    } catch (e) {
-      // fall through to heuristic
-    }
+    } catch (e) { /* fall through to heuristic */ }
   }
+
+  // Fallback heuristic — only now take the extra snapshot for visible text.
+  const full = await vm.snapshot({ interactive: false, compact: true });
+  const els = parseSnapshot(interactive);
+  const { messages, codes } = extractAuthText(full);
 
   if (isAuthenticated(els, url, title)) {
     return { step: 'done', authenticated: true, url, title, messages, fields: [], buttons: [], codesShown: [] };
@@ -400,6 +406,27 @@ async function fillLogin(conn, input = [], submit = true) {
   }
   const next = await detectAuthStep(conn);
   return { ok: true, submitted: Boolean(submit), filled, ...next, needsOtp: next.step === 'code' };
+}
+
+/**
+ * Navigate to the sign-in page and analyze it with the model — stops as soon as
+ * a usable sign-in screen (fields or methods), an authenticated view, or a
+ * sign-up page is found. Fewer round-trips than probing every URL.
+ */
+async function openLoginAndAnalyze(conn) {
+  const tries = [conn.loginUrl, conn.url, `https://${conn.domain}/login`, `https://${conn.domain}/signin`, `https://${conn.domain}/session/new`, `https://${conn.domain}/auth/login`].filter(Boolean);
+  const seen = new Set();
+  let last = null;
+  for (const u of tries) {
+    if (seen.has(u)) continue; seen.add(u);
+    await vm.open(u); await vm.sleep(1800);
+    const step = await detectAuthStep(conn);
+    last = step;
+    const usable = step.authenticated || step.step === 'signup' ||
+      (step.fields && step.fields.length) || (step.ssoButtons && step.ssoButtons.length);
+    if (usable) { connections.update(conn.id, { loginUrl: step.url }); return step; }
+  }
+  return last || { step: 'other', url: conn.url, fields: [], ssoButtons: [], buttons: [], messages: [], codesShown: [] };
 }
 
 /** Click a named auth action (Verify / Resend / Approve) by ref, then re-read the step. */
@@ -682,6 +709,7 @@ module.exports = {
   resolveSiteUrl,
   verifySession,
   detectLoginForm,
+  openLoginAndAnalyze,
   detectAuthStep,
   clickAuthButton,
   fillLogin,

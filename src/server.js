@@ -531,13 +531,8 @@ app.post('/api/connections/:id/open-login', async (req, res) => {
   if (!conn) return res.status(404).json({ error: 'Connection not found.' });
   try {
     connections.setStatus(conn.id, 'authenticating');
-    const form = await siteAgent.detectLoginForm(conn); // navigates to the sign-in page
-    let step;
-    if (form && form.ok === false) step = { step: 'signup', ok: false, message: form.message, fields: [], ssoButtons: [], buttons: [], codesShown: [], messages: [] };
-    else step = await siteAgent.detectAuthStep(conn); // rich view of the current sign-in screen
-    let screenshot = '';
-    try { screenshot = await require('./vmShell').screenshotBase64(); } catch (_) {}
-    res.json({ ok: step.step !== 'signup', ...step, screenshot });
+    const step = await siteAgent.openLoginAndAnalyze(conn); // navigate + model analysis, fast
+    res.json({ ok: step.step !== 'signup', ...step });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
