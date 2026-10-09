@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "boxd-vps": {
+      "command": "node",
+      "args": ["C:\Users\Admin\OneDrive\Documents\MCP_wrapper\src\mcp\server.js"],
+      "env": {
+        "BOXD_API_KEY": "${BOXD_API_KEY}",
+        "BOXD_DEFAULT_VM": "sitemcp-core",
+        "LLM_API_BASE": "${LLM_API_BASE}",
+        "LLM_API_KEY": "${LLM_API_KEY}",
+        "LLM_MODEL": "gemini-2.5-pro"
+      }
+    }
+  }
+}

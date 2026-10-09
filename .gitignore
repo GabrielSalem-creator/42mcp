@@ -1,0 +1,13 @@
+# secrets & local state — never commit
+.env
+*.log
+server.log
+
+# data (runtime state, collected items, sessions, connections)
+data/*.json
+
+# deps & scratch
+node_modules/
+.DS_Store
+Thumbs.db
+*.tmp

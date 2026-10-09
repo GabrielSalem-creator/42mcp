@@ -1,0 +1,32 @@
+{
+  "name": "boxd-mcp-wrapper",
+  "version": "1.0.0",
+  "description": "Boxd Cloud MicroVM MCP Wrapper and Visual AI Agent Controller",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "restart-web": "powershell -ExecutionPolicy Bypass -File scripts/start-web.ps1",
+    "mcp": "node src/mcp/server.js",
+    "connect": "node scripts/connect-vm.js",
+    "setup": "node scripts/connect-vm.js && powershell -ExecutionPolicy Bypass -File scripts/setup-clis.ps1",
+    "sync-vm": "node scripts/sync_vm_scripts.js",
+    "vm-agent": "powershell -ExecutionPolicy Bypass -File scripts/vm-agent.ps1",
+    "agy-vm": "powershell -ExecutionPolicy Bypass -File scripts/agy-vm.ps1",
+    "probe": "node scripts/probe-vm.js",
+    "vm": "node scripts/vm-exec.js",
+    "domain": "node scripts/domain-setup.js 42mcp.tech",
+    "domain-bind": "node scripts/domain-setup.js 42mcp.tech --create",
+    "deploy": "node scripts/deploy-vm.js",
+    "deploy-prep": "node scripts/deploy-vm.js --prep-only",
+    "go-live": "node scripts/deploy-vm.js --service-only",
+    "cursor-login-vm": "node scripts/cursor-login-vm.js"
+  },
+  "dependencies": {
+    "@boxd-sh/sdk": "^0.2.13",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.5",
+    "express": "^5.2.1",
+    "ws": "^8.22.0"
+  }
+}
