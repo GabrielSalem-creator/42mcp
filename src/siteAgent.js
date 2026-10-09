@@ -181,26 +181,40 @@ function extractAuthText(snap) {
  * LLM reads the full page (accessibility tree ≈ meaningful HTML) and decides what
  * the current sign-in step is and exactly what to show — works for ANY site.
  */
+const AUTH_ANALYSIS_PROMPT = `You are a precise web sign-in analyst. You are given the ACCESSIBILITY TREE of the page that is open RIGHT NOW in a browser where the account owner is trying to SIGN IN to their OWN account. Each interactive element has a ref like [ref=e12].
+
+Your job: report the EXACT current state of this one page and EXACTLY what the user must provide at this instant — nothing more, nothing less. The sign-in is multi-step: only describe THIS page. Do not ask for a password if the page only asks for an email. Do not invent fields that are not on the page.
+
+Decide the state:
+- "done": this is a signed-in / logged-in view. Signals: a Sign out / Log out control, an account menu or avatar, a dashboard / inbox / feed / profile, and NO login form. If you see "Sign in" / "Log in" / "Sign up" call-to-actions, it is NOT done.
+- "signup": this is a registration / create-account page (it asks to CREATE an account). Set signup=true. We never automate sign-up.
+- "credentials": the page asks for identity and/or secret. This includes: email-only first step (e.g. Google, Microsoft), username+password, phone+password, password-only second step.
+- "code": the page asks for a verification / one-time / 2FA / authenticator / SMS / email code. Put the input(s) in fields with type "otp".
+- "push": the page is waiting for the user to approve on another device, OR it DISPLAYS a number for the user to tap/match on their phone (e.g. GitHub Mobile, Microsoft Authenticator). There is usually no input to type. Put any displayed number(s) in codesShown.
+- "input": any other step that needs typed input (security question, recovery email, etc.).
+
+Field rules (very important):
+- Include in "fields" ONLY inputs the user must TYPE on THIS page right now.
+- NEVER include: language selector, country/region, currency, timezone, search box, cookie/consent controls, newsletter/marketing, promo/coupon, or anything decorative.
+- Use the element's own visible label verbatim.
+- type is one of: "username" (user id / handle / "username or email"), "email", "password", "otp" (any verification/one-time code), "tel" (phone), "text" (anything else).
+- Report fields in the ON-SCREEN order, top to bottom.
+
+Also report:
+- "instruction": one short sentence quoting what the site is telling the user to do now (e.g. "Enter the 6-digit code we sent to your phone").
+- "buttons": the primary action controls (Sign in / Log in / Continue / Next / Submit / Verify / Confirm / Resend / Approve).
+- "methods": alternative sign-in methods the page offers (Continue with Google/Apple/Microsoft/GitHub/Facebook, passkey, email magic link, SSO). NEVER include Sign up / Create account here.
+- "codesShown": any SHORT number/code the PAGE ITSELF DISPLAYS for the user to confirm on a device. Do NOT put the user's input here.
+
+Return STRICT JSON ONLY — no markdown, no commentary:
+{"authenticated":bool,"signup":bool,"step":"credentials|code|push|input|done","instruction":"...","fields":[{"ref":"e#","label":"...","type":"username|email|password|otp|tel|text"}],"buttons":[{"ref":"e#","label":"..."}],"methods":[{"ref":"e#","label":"..."}],"codesShown":["..."]}`;
+
 async function analyzeAuthWithLLM(snapshot, url, title) {
-  const sys = `You read a web page's accessibility tree to drive a SIGN-IN flow (never sign-up).
-Interactive elements appear with a ref like [ref=e12]. Return STRICT JSON only (no prose, no markdown):
-{
- "authenticated": boolean,  // true only if this is a logged-in account view (sign-out / profile / dashboard present, no login form)
- "signup": boolean,         // true if this is a registration / create-account page
- "step": "credentials" | "code" | "push" | "input" | "done",
- "instruction": string,     // one short sentence: exactly what the site is asking the user to do right now
- "fields": [{"ref":"e#","label":"<visible label>","type":"username|email|password|otp|tel|text"}],
- "buttons": [{"ref":"e#","label":"<text>"}],   // submit/verify/continue/next/resend/approve
- "methods": [{"ref":"e#","label":"<text>"}],   // alternative sign-in methods: continue with google/apple/microsoft/passkey/email link
- "codesShown": ["<number>"]  // short number/code the PAGE DISPLAYS for the user to confirm on a device (e.g. GitHub device match)
-}
-Rules: include in "fields" ONLY real credential/verification inputs the user must type now; never include language, country, region, search, cookie or newsletter inputs. If only an email/identifier is requested first (e.g. Google), return just that one field with step "credentials".`;
-  const user = `URL: ${url}\nTitle: ${title}\n\nAccessibility tree:\n${String(snapshot).slice(0, 6500)}`;
-  const out = await llmComplete([{ role: 'system', content: sys }, { role: 'user', content: user }], 25000, 600);
+  const user = `URL: ${url}\nPAGE TITLE: ${title}\n\nACCESSIBILITY TREE (the current page):\n${String(snapshot).slice(0, 6500)}`;
+  const out = await llmComplete([{ role: 'system', content: AUTH_ANALYSIS_PROMPT }, { role: 'user', content: user }], 25000, 700);
   const m = out.match(/\{[\s\S]*\}/);
   if (!m) return null;
-  const j = JSON.parse(m[0]);
-  return j;
+  return JSON.parse(m[0]);
 }
 
 /**

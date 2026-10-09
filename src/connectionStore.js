@@ -33,6 +33,28 @@ class ConnectionStore {
   constructor() {
     this.state = load();
     this.listeners = [];
+    this.migrate();
+  }
+
+  /** One-time: give every connection a deterministic id + a persistent per-domain key. */
+  migrate() {
+    this.state.domainKeys = this.state.domainKeys || {};
+    const conns = this.state.connections || {};
+    let changed = false;
+    for (const [oldId, c] of Object.entries(conns)) {
+      if (!c || !c.domain) continue;
+      this.state.domainKeys[c.domain] = this.state.domainKeys[c.domain] || c.apiKey;
+      const newId = 'conn_' + slug(c.domain);
+      c.apiKey = this.state.domainKeys[c.domain];
+      if (oldId !== newId) {
+        c.id = newId;
+        conns[newId] = c;
+        delete conns[oldId];
+        if (this.state.activeId === oldId) this.state.activeId = newId;
+        changed = true;
+      }
+    }
+    if (changed) this.save();
   }
 
   onUpdate(fn) { this.listeners.push(fn); }
@@ -65,7 +87,12 @@ class ConnectionStore {
     if (existing) { this.setActive(existing.id); return existing; }
     // Keep every connected account; the newest just becomes the active chat context.
 
-    const id = 'conn_' + slug(domain) + '_' + crypto.randomBytes(3).toString('hex');
+    // Deterministic id per site, and a persistent key per domain so the id/key
+    // NEVER change across logout/reconnect/restart.
+    const id = 'conn_' + slug(domain);
+    this.state.domainKeys = this.state.domainKeys || {};
+    const apiKey = this.state.domainKeys[domain] || ('sk_live_' + crypto.randomBytes(20).toString('hex'));
+    this.state.domainKeys[domain] = apiKey;
     const conn = {
       id,
       domain,
@@ -74,7 +101,7 @@ class ConnectionStore {
       status: 'new', // new | authenticating | connected | needs_auth | error
       createdAt: new Date().toISOString(),
       lastActiveAt: null,
-      apiKey: 'sk_live_' + crypto.randomBytes(20).toString('hex'),
+      apiKey,
       loginUrl: null,
       tools: [],       // [{ name, title, description, risk, inputSchema }]
       workflows: {},   // toolName -> { version, steps, lastSuccessAt, successRate }

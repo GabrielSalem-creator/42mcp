@@ -630,9 +630,14 @@ app.get('/api/connections/:id/integration', (req, res) => {
 
 // REST bridge: external clients call a connection's tools/instructions with its API key
 async function restInvoke(req, res) {
-  const conn = connections.get(req.params.id);
-  if (!conn) return res.status(404).json({ ok: false, error: 'Connection not found.' });
   const auth = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  // Resolve by id; if the id is stale/wrong but the API key is valid, use the key.
+  let conn = connections.get(req.params.id);
+  if ((!conn || conn.apiKey !== auth) && auth) {
+    const byKey = connections.findByApiKey(auth);
+    if (byKey) conn = byKey;
+  }
+  if (!conn) return res.status(404).json({ ok: false, error: 'Connection not found.' });
   if (!auth || auth !== conn.apiKey) return res.status(401).json({ ok: false, error: 'Invalid API key.' });
   const body = req.body || {};
   // Accept common field names so any client snippet works: instruction/prompt/query/q/message/input/text
