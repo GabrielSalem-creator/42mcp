@@ -22,7 +22,18 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchStatus();
   setInterval(fetchStatus, 20000);
   boot();
+  setupViewport();
 });
+
+// Keep the composer above the iOS keyboard by sizing to the visual viewport.
+function setupViewport() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const fit = () => { document.body.style.height = vv.height + 'px'; };
+  vv.addEventListener('resize', fit);
+  vv.addEventListener('scroll', fit);
+  fit();
+}
 
 /* ---------------- accounts panel ---------------- */
 async function openAccounts() {

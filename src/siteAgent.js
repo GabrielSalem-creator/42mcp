@@ -53,10 +53,14 @@ function looksLikeSignup(elements, title) {
 function isAuthenticated(elements, url, title) {
   const hay = (title + ' ' + elements.map((e) => e.name).join(' ')).toLowerCase();
   const hasPassword = elements.some((e) => /password/i.test(e.name) || /password/i.test(e.attrs));
-  const onLoginUrl = /(login|signin|sign-in|auth|sso)/i.test(url);
-  const accountMarkers = /(log ?out|sign ?out|account|profile|dashboard|inbox|feed|settings|home)/.test(hay);
+  const onLoginUrl = /(login|signin|sign-in|sign_in|auth|sso)/i.test(url);
+  // A visible "Sign in / Sign up / Log in / Get started" control (without a matching sign-out) means signed OUT.
+  const signedOutCta = elements.some((e) => /button|link/.test(e.role) && /^(sign ?in|sign ?up|log ?in|create (an )?account|get started|join)\b/i.test(e.name));
+  const hasSignOut = /(log ?out|sign ?out)/.test(hay);
   if (hasPassword || onLoginUrl) return false;
-  return accountMarkers;
+  if (signedOutCta && !hasSignOut) return false;
+  // Strong signals of being inside an account.
+  return hasSignOut || /(your profile|my account|dashboard|avatar|account menu|notifications)/.test(hay);
 }
 
 /** Open the site and report whether the owner's session is active. */

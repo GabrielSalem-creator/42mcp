@@ -35,6 +35,6 @@ module.exports = {
   // Artbloom (OpenAI-compatible) fallback LLM
   artbloomApiKey: process.env.ARTBLOOM_API_KEY || '',
   artbloomBaseUrl: process.env.ARTBLOOM_API_BASE || 'https://api.artbloom.tech/v1',
-  artbloomModel: process.env.ARTBLOOM_MODEL || 'gemini-2.5-pro',
+  artbloomModel: process.env.ARTBLOOM_MODEL || 'glm-5.3',
   artbloomTimeoutMs: parseInt(process.env.ARTBLOOM_TIMEOUT_MS, 10) || 90000,
 };

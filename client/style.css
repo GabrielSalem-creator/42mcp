@@ -1,4 +1,5 @@
-*, *::before, *::after { box-sizing: border-box; }
+*, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
 :root {
   --bg: #0a0b0f;
@@ -176,11 +177,28 @@ body {
 .chat::-webkit-scrollbar { width: 8px; }
 .chat::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 8px; }
 
-/* phone */
+/* phone — iPhone-optimised */
 @media (max-width: 560px) {
   body { font-size: 15px; }
-  .bubble { max-width: 86%; }
-  .bubble--card { max-width: 96%; }
-  .log { padding: 1rem .7rem 1.4rem; }
+  .bubble { max-width: 88%; font-size: 1rem; }
+  .bubble--card { max-width: 100%; }
+  .log { padding: 1rem .7rem 1.4rem; gap: .8rem; }
   .composer { padding-left: .7rem; padding-right: .7rem; }
+  /* inputs ≥16px so iOS Safari never auto-zooms on focus */
+  .composer__field textarea,
+  .lfield input,
+  .live__row input,
+  .cred__val code { font-size: 16px; }
+  .composer__field { border-radius: 20px; }
+  .composer__send { width: 42px; height: 42px; }
+  .numcard__num { font-size: 1.9rem; }
+  .sheet-backdrop { padding: 1rem .7rem; align-items: flex-end; }
+  .sheet { max-width: 100%; border-radius: 20px 20px 0 0; padding-bottom: calc(1.3rem + env(safe-area-inset-bottom)); }
+  .acct__actions { flex-direction: column; }
+  .bar__new { padding: .34rem .6rem; }
+}
+
+/* respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }

@@ -633,7 +633,7 @@ async function restInvoke(req, res) {
   try {
     const started = Date.now();
     const out = await siteAgent.runInstruction(conn, task);
-    res.json({ ok: out.ok, data: out.result, risk: out.risk, execution: { ms: Date.now() - started, mode: tool ? 'tool' : 'instruction' } });
+    res.json({ ok: out.ok, data: out.result, error: out.ok ? undefined : (out.error || 'The agent could not complete that instruction.'), risk: out.risk, steps: out.steps ? out.steps.length : undefined, execution: { ms: Date.now() - started, mode: tool ? 'tool' : 'instruction' } });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
