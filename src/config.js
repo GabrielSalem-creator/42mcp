@@ -31,6 +31,8 @@ module.exports = {
   cursorModel: process.env.CURSOR_MODEL || 'auto',
   cursorBin: '/home/boxd/.local/bin/agent',
   agentWorkspace: '/home/boxd/agent-ws',
+  // Optional local reasoning CLI for page analysis (set ANALYSIS_CLI in .env). Empty = use hosted model only.
+  analysisCliBin: process.env.ANALYSIS_CLI || '',
 
   // Artbloom (OpenAI-compatible) fallback LLM
   artbloomApiKey: process.env.ARTBLOOM_API_KEY || '',

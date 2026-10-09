@@ -11,3 +11,9 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.tmp
+
+# VM-ops helpers (contain host-specific/provider details)
+scripts/login-cli-vm.js
+scripts/fix-vm-env.js
+scripts/rebind-domain.js
+scripts/dbg-*.js

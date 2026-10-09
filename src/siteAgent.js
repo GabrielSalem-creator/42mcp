@@ -211,7 +211,7 @@ Return STRICT JSON ONLY — no markdown, no commentary:
 
 async function analyzeAuthWithLLM(snapshot, url, title) {
   const user = `URL: ${url}\nPAGE TITLE: ${title}\n\nACCESSIBILITY TREE (the current page):\n${String(snapshot).slice(0, 6500)}`;
-  const out = await llmComplete([{ role: 'system', content: AUTH_ANALYSIS_PROMPT }, { role: 'user', content: user }], 25000, 700);
+  const out = await analysisComplete(AUTH_ANALYSIS_PROMPT, user, 30000, 700);
   const m = out.match(/\{[\s\S]*\}/);
   if (!m) return null;
   return JSON.parse(m[0]);
@@ -363,6 +363,32 @@ const BRANDS = {
   amazon: 'amazon.com', netflix: 'netflix.com', twitch: 'twitch.tv',
   whatsapp: 'web.whatsapp.com', telegram: 'web.telegram.org'
 };
+
+const boxdClient = require('./boxdClient');
+
+/** Run a prompt through a configured local reasoning CLI on the VM (reads stdin). */
+async function cliComplete(prompt, timeoutMs = 30000) {
+  const bin = config.analysisCliBin;
+  if (!bin) throw new Error('no analysis CLI configured');
+  const b64 = Buffer.from(String(prompt), 'utf8').toString('base64');
+  const cmd = `export DISPLAY=${config.display}; echo ${b64} | base64 -d | ${bin} -p --output-format text 2>/dev/null`;
+  const r = await boxdClient.exec(cmd, undefined, timeoutMs);
+  return (r.stdout || '').trim();
+}
+
+/**
+ * Best available completion for page-understanding tasks: a configured local
+ * reasoning CLI first (highest quality), else the hosted model. Returns raw text.
+ */
+async function analysisComplete(system, user, timeoutMs = 30000, maxTokens = 700) {
+  if (config.analysisCliBin) {
+    try {
+      const out = await cliComplete(`${system}\n\n${user}`, timeoutMs);
+      if (out && /[\{\[]/.test(out)) return out;
+    } catch (_) { /* fall back */ }
+  }
+  return llmComplete([{ role: 'system', content: system }, { role: 'user', content: user }], Math.min(timeoutMs, 25000), maxTokens);
+}
 
 async function llmComplete(messages, timeoutMs = 20000, maxTokens = 60) {
   const url = config.artbloomBaseUrl.replace(/\/$/, '') + '/chat/completions';
