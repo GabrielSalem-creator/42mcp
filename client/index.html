@@ -2,193 +2,59 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>42MCP — Any website becomes an MCP</title>
-  <meta name="description" content="Tell it a website. Sign in once. Get an always-on MCP server and API for that site.">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1">
+  <title>42MCP — chat</title>
+  <meta name="description" content="Chat to turn any website into an MCP server and API.">
+  <meta name="theme-color" content="#0a0b0f">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
-<body data-theme="dark">
-  <!-- Top bar -->
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand__mark">42</span>
-      <span class="brand__name">MCP</span>
+<body>
+  <header class="bar">
+    <div class="bar__brand">
+      <span class="bar__mark">42</span>
+      <span class="bar__name">MCP</span>
     </div>
-    <div class="topbar__spacer"></div>
-    <div class="status-pill" id="vmPill" title="Cloud machine status">
+    <button class="bar__status" id="vmPill" type="button" title="Cloud machine">
       <span class="dot" id="vmDot"></span>
-      <span id="vmStatusText">connecting…</span>
-    </div>
-    <a class="ghost-btn" id="desktopLink" href="#" target="_blank" rel="noopener">Live desktop ↗</a>
+      <span id="vmStatusText">…</span>
+    </button>
+    <button class="bar__icon" id="accountsBtn" type="button" title="Your accounts" aria-label="Your accounts">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 12a5 5 0 10-5-5 5 5 0 005 5zm0 2c-4 0-9 2-9 5v2h18v-2c0-3-5-5-9-5z"/></svg>
+    </button>
+    <button class="bar__new" id="newChatBtn" type="button" title="Connect a new site">+ New</button>
   </header>
 
-  <main class="shell">
-    <!-- ===== Empty / onboarding state: one big chat prompt ===== -->
-    <section class="hero" id="heroView">
-      <div class="hero__inner">
-        <div class="hero__badge">Universal Website → MCP</div>
-        <h1 class="hero__title">Turn <span class="grad">any website</span> into an MCP&nbsp;server&nbsp;&amp;&nbsp;API.</h1>
-        <p class="hero__sub">Name a site. Sign in once on your private cloud browser. Get an always-online MCP endpoint and REST API that reads and acts on it for you.</p>
-
-        <form class="ask" id="askForm">
-          <div class="ask__field">
-            <svg class="ask__icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 100 20 10 10 0 000-20zm6.93 6h-2.95a15.6 15.6 0 00-1.38-3.56A8 8 0 0118.93 8zM12 4c.83 1.2 1.48 2.53 1.91 4h-3.82c.43-1.47 1.08-2.8 1.91-4zM4.26 14a7.96 7.96 0 010-4h3.38a16.6 16.6 0 000 4H4.26zm.81 2h2.95c.35 1.27.82 2.47 1.38 3.56A8 8 0 015.07 16zm2.95-8H5.07a8 8 0 014.33-3.56A15.6 15.6 0 008.02 8zM12 20c-.83-1.2-1.48-2.53-1.91-4h3.82c-.43 1.47-1.08 2.8-1.91 4zm2.36-6H9.64a14.7 14.7 0 010-4h4.72a14.7 14.7 0 010 4zm.68 5.56c.56-1.09 1.03-2.29 1.38-3.56h2.95a8 8 0 01-4.33 3.56zM16.36 14a16.6 16.6 0 000-4h3.38a7.96 7.96 0 010 4h-3.38z"/></svg>
-            <input id="askInput" type="text" placeholder="Which website? e.g. instagram.com, your school portal, a CRM…" autocomplete="off" autofocus>
-          </div>
-          <button type="submit" class="primary-btn">Build my MCP</button>
-        </form>
-
-        <div class="chips" id="exampleChips">
-          <button type="button" class="chip" data-url="https://instagram.com">instagram.com</button>
-          <button type="button" class="chip" data-url="https://github.com">github.com</button>
-          <button type="button" class="chip" data-url="https://x.com">x.com</button>
-          <button type="button" class="chip" data-url="https://linkedin.com">linkedin.com</button>
-        </div>
-
-        <ol class="how">
-          <li><span>1</span> Name a site</li>
-          <li><span>2</span> Sign in once</li>
-          <li><span>3</span> Get MCP + API</li>
-        </ol>
+  <!-- Accounts sheet -->
+  <div class="sheet-backdrop" id="accountsSheet" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Your connected accounts">
+      <div class="sheet__head">
+        <h2>Your accounts</h2>
+        <button class="sheet__close" id="accountsClose" aria-label="Close">✕</button>
       </div>
-    </section>
-
-    <!-- ===== Workspace state: live screen + connection panel ===== -->
-    <section class="workspace hidden" id="workspaceView">
-      <!-- Live cloud browser -->
-      <div class="screen">
-        <div class="screen__bar">
-          <div class="screen__site" id="screenSite">
-            <span class="dot dot--live"></span>
-            <span id="screenDomain">—</span>
-          </div>
-          <div class="screen__urlwrap">
-            <input id="gotoUrl" class="screen__url" placeholder="Go to address…" autocomplete="off">
-          </div>
-          <button class="icon-btn" id="refreshBtn" title="Refresh">⟳</button>
-          <button class="ghost-btn ghost-btn--sm" id="switchSiteBtn">Switch site</button>
-        </div>
-        <div class="screen__frame" id="screenFrame">
-          <img id="screenImg" class="screen__img" alt="Live cloud browser">
-          <div class="screen__overlay" id="screenOverlay">
-            <div class="spinner"></div>
-            <p id="screenOverlayText">Starting your private browser…</p>
-          </div>
-        </div>
-        <div class="screen__hint">Click the picture to click in the real browser. Scroll to scroll. Type below to send keys.</div>
-        <div class="screen__type">
-          <input id="typeInput" class="screen__typefield" placeholder="Type into the page…" autocomplete="off">
-          <button class="ghost-btn ghost-btn--sm" id="typeBtn">Send</button>
-          <button class="ghost-btn ghost-btn--sm" id="enterBtn">↵ Enter</button>
-        </div>
-      </div>
-
-      <!-- Right column -->
-      <aside class="panel">
-        <!-- Connection header -->
-        <div class="card conn" id="connCard">
-          <div class="conn__head">
-            <div class="conn__ico" id="connFav">🌐</div>
-            <div>
-              <div class="conn__name" id="connName">—</div>
-              <div class="conn__status" id="connStatusLine"><span class="dot" id="connDot"></span><span id="connStatusText">—</span></div>
-            </div>
-          </div>
-          <div class="conn__actions">
-            <button class="primary-btn primary-btn--sm" id="signInBtn">Sign in</button>
-            <button class="ghost-btn ghost-btn--sm" id="verifyBtn">Verify session</button>
-          </div>
-        </div>
-
-        <!-- Tabbed panel -->
-        <div class="tabs" id="panelTabs">
-          <button class="tab is-active" data-tab="use">Use</button>
-          <button class="tab" data-tab="integrate">MCP &amp; API</button>
-          <button class="tab" data-tab="activity">Activity</button>
-        </div>
-
-        <!-- USE tab: instruction chat -->
-        <div class="tabpane is-active" data-pane="use">
-          <div class="card">
-            <h3 class="card__title">Ask your site</h3>
-            <p class="muted">Say what to fetch or do. Save a good one as a reusable tool.</p>
-            <div class="chatlog" id="chatLog"></div>
-            <form class="chatform" id="runForm">
-              <textarea id="runInput" rows="2" placeholder="e.g. get my latest 10 posts with captions"></textarea>
-              <div class="chatform__row">
-                <input id="saveAs" class="mini-input" placeholder="save as tool (optional) e.g. get_posts" autocomplete="off">
-                <button type="submit" class="primary-btn primary-btn--sm">Run</button>
-              </div>
-            </form>
-            <div class="result" id="runResult"></div>
-          </div>
-        </div>
-
-        <!-- INTEGRATE tab -->
-        <div class="tabpane" data-pane="integrate">
-          <div class="card">
-            <h3 class="card__title">Your MCP server</h3>
-            <div class="kv">
-              <label>MCP URL</label>
-              <div class="copyrow"><code id="mcpUrl">—</code><button class="copy" data-copy="mcpUrl">Copy</button></div>
-            </div>
-            <div class="kv">
-              <label>REST endpoint</label>
-              <div class="copyrow"><code id="restUrl">—</code><button class="copy" data-copy="restUrl">Copy</button></div>
-            </div>
-            <div class="kv">
-              <label>API key</label>
-              <div class="copyrow"><code id="apiKey" class="secret">—</code><button class="copy" data-copy="apiKey">Copy</button><button class="copy" id="revealKey">Reveal</button></div>
-            </div>
-          </div>
-          <div class="card">
-            <h3 class="card__title">Call it</h3>
-            <pre class="code" id="curlSnippet">—</pre>
-          </div>
-          <div class="card">
-            <h3 class="card__title">Tools <span class="count" id="toolCount">0</span></h3>
-            <div id="toolList" class="toollist"><p class="muted">Run an instruction and save it as a tool to grow this list.</p></div>
-          </div>
-        </div>
-
-        <!-- ACTIVITY tab -->
-        <div class="tabpane" data-pane="activity">
-          <div class="card">
-            <h3 class="card__title">Recent runs</h3>
-            <div id="activityList" class="activity"><p class="muted">No runs yet.</p></div>
-          </div>
-        </div>
-      </aside>
-    </section>
-  </main>
-
-  <!-- ===== Dynamic login modal ===== -->
-  <div class="modal-backdrop hidden" id="loginModal">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
-      <button class="modal__close" id="loginClose" aria-label="Close">✕</button>
-      <div class="modal__head">
-        <div class="modal__site" id="loginSite">site</div>
-        <h2 id="loginTitle">Sign in</h2>
-        <p class="muted" id="loginSub">Enter the details this site asks for. They go straight into your private browser and are not stored.</p>
-      </div>
-      <form id="loginForm" class="modal__form">
-        <div id="loginFields" class="fields"></div>
-        <div id="ssoRow" class="sso"></div>
-        <div class="modal__notice">🔒 Login only. We never create accounts or store your password.</div>
-        <div class="modal__actions">
-          <button type="button" class="ghost-btn" id="loginManual">I'll sign in on the screen</button>
-          <button type="submit" class="primary-btn" id="loginSubmit">Continue</button>
-        </div>
-      </form>
-      <div id="loginBusy" class="modal__busy hidden"><div class="spinner"></div><span id="loginBusyText">Working…</span></div>
+      <p class="sheet__sub" id="accountsSub">Sites you're signed in to. Open one to use it, or log out.</p>
+      <div class="acct-list" id="acctList"></div>
+      <button class="btn btn--block" id="accountsAdd">+ Connect another site</button>
     </div>
   </div>
 
-  <div class="toast" id="toast"></div>
+  <main class="chat" id="chat">
+    <div class="log" id="log"></div>
+  </main>
 
+  <form class="composer" id="composer">
+    <div class="composer__field">
+      <textarea id="input" rows="1" placeholder="Type a website, e.g. instagram.com" autocomplete="off" enterkeyhint="send"></textarea>
+      <button type="submit" class="composer__send" id="sendBtn" aria-label="Send">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a.99.99 0 00-1.39 1.1L4 11l9 1-9 1-1.99 6.3c-.19.79.61 1.43 1.39 1.1z"/></svg>
+      </button>
+    </div>
+    <p class="composer__hint" id="composerHint">Sign in once, get an MCP server &amp; API — all in this chat.</p>
+  </form>
+
+  <div class="toast" id="toast"></div>
   <script src="app.js"></script>
 </body>
 </html>

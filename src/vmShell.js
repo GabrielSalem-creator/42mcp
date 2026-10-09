@@ -44,13 +44,30 @@ async function snapshot(opts = {}) {
   return r.stdout;
 }
 
-/** Base64 PNG screenshot of the current page. */
+// Capture PNG then downscale to a small real JPEG with ImageMagick (keeps every
+// frame light — a few tens of KB — so the live view stays responsive).
+const SHOT = 'agent-browser screenshot /tmp/sitemcp_raw.png >/dev/null 2>&1; ' +
+  'convert /tmp/sitemcp_raw.png -resize 1280x720\\> -quality 50 /tmp/sitemcp_screen.jpg 2>/dev/null || cp /tmp/sitemcp_raw.png /tmp/sitemcp_screen.jpg; ';
+
+/** Base64 JPEG screenshot of the current page (fast, low-bandwidth). */
 async function screenshotBase64() {
-  const r = await browserShell(
-    'agent-browser screenshot /tmp/sitemcp_screen.png >/dev/null 2>&1; base64 -w 0 /tmp/sitemcp_screen.png',
-    40000
-  );
+  const r = await browserShell(SHOT + 'base64 -w 0 /tmp/sitemcp_screen.jpg', 30000);
   return r.stdout.trim();
+}
+
+/** Screenshot + current url/title in one round-trip. */
+async function getScreen() {
+  const r = await browserShell(
+    SHOT +
+    'echo "===URL==="; agent-browser get url 2>/dev/null; echo "===TITLE==="; agent-browser get title 2>/dev/null; ' +
+    'echo "===IMG==="; base64 -w 0 /tmp/sitemcp_screen.jpg',
+    30000
+  );
+  const out = r.stdout || '';
+  const url = (out.split('===URL===')[1] || '').split('===TITLE===')[0].trim();
+  const title = (out.split('===TITLE===')[1] || '').split('===IMG===')[0].trim();
+  const img = (out.split('===IMG===')[1] || '').trim();
+  return { screenshot: img, url, title, mime: 'image/jpeg' };
 }
 
 async function cookiesJson() {
@@ -81,6 +98,7 @@ module.exports = {
   getTitle,
   snapshot,
   screenshotBase64,
+  getScreen,
   cookiesJson,
   open,
   sleep

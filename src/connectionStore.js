@@ -58,16 +58,12 @@ class ConnectionStore {
     return { ...rest, apiKeyPreview: apiKey ? apiKey.slice(0, 12) + '…' : null };
   }
 
-  create({ url, label, single = true }) {
+  create({ url, label }) {
     const domain = registrableDomain(url);
     if (!domain) throw new Error('A valid website address is required.');
     const existing = this.getByDomain(domain);
     if (existing) { this.setActive(existing.id); return existing; }
-
-    // Single-connection mode: one MCP target at a time. Switching sites removes the old one.
-    if (single) {
-      for (const other of this.list()) this.remove(other.id);
-    }
+    // Keep every connected account; the newest just becomes the active chat context.
 
     const id = 'conn_' + slug(domain) + '_' + crypto.randomBytes(3).toString('hex');
     const conn = {

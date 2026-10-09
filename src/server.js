@@ -244,16 +244,14 @@ app.post('/api/vm/proxy', async (req, res) => {
   }
 });
 
-// Real-time browser screenshot
+// Real-time browser screenshot (fast JPEG via agent-browser)
 app.post('/api/browser/screenshot', async (req, res) => {
-  const { url, platform } = req.body;
+  const { url } = req.body;
+  const vmsh = require('./vmShell');
   try {
-    const cmd = url
-      ? `python3 /home/boxd/vm_agent_controller.py screenshot --url "${url}" --platform "${platform || 'web'}"`
-      : `python3 /home/boxd/vm_agent_controller.py screenshot`;
-    const result = await boxdClient.exec(cmd, undefined, 60000);
-    const parsed = parseVmJson(result.stdout);
-    res.json(parsed);
+    if (url) { await vmsh.open(url); await vmsh.sleep(1500); }
+    const screen = await vmsh.getScreen(req.body.quality || 55);
+    res.json(screen);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -291,7 +289,7 @@ app.post('/api/browser/input', async (req, res) => {
 
     let parsed = {};
     try {
-      parsed = await vmScreenshot(30000);
+      parsed = await require('./vmShell').getScreen(55);
     } catch (snapErr) {
       console.warn('Screenshot after input failed:', snapErr.message);
     }
@@ -417,7 +415,7 @@ app.get('/api/data/export', (req, res) => {
   res.send(JSON.stringify(items, null, 2));
 });
 
-// Ready-to-copy MCP Configuration files for Cursor and Claude
+// Ready-to-copy MCP configuration for MCP-compatible clients
 app.get('/api/mcp-config', (req, res) => {
   const mcpScriptPath = path.resolve(__dirname, 'mcp/server.js');
   const projectRoot = path.resolve(__dirname, '..');
@@ -435,7 +433,7 @@ app.get('/api/mcp-config', (req, res) => {
     }
   };
 
-  const claudeDesktopConfig = {
+  const desktopClientConfig = {
     mcpServers: {
       "boxd-vps-mcp": {
         command: "node",
@@ -456,7 +454,7 @@ app.get('/api/mcp-config', (req, res) => {
 
   res.json({
     cursor: cursorConfig,
-    claude: claudeDesktopConfig,
+    mcpClient: desktopClientConfig,
     agy: agyCliConfig,
     scriptPath: mcpScriptPath,
     projectRoot
@@ -498,16 +496,38 @@ app.delete('/api/connections/:id', (req, res) => {
   res.json({ success: connections.remove(req.params.id) });
 });
 
+// Switch which connection is the active chat context
+app.post('/api/connections/:id/activate', (req, res) => {
+  const c = connections.setActive(req.params.id);
+  if (!c) return res.status(404).json({ error: 'Connection not found.' });
+  res.json({ connection: connections.publicView(c), integration: integrationFor(c) });
+});
+
+// Log out: clear the site's session on the VM and remove the connection
+app.post('/api/connections/:id/logout', async (req, res) => {
+  const conn = connections.get(req.params.id);
+  if (!conn) return res.status(404).json({ error: 'Connection not found.' });
+  try {
+    const vmsh = require('./vmShell');
+    try { await vmsh.open(conn.url); await vmsh.agentBrowser(['cookies', 'clear'], 15000); } catch (_) {}
+    connections.remove(conn.id);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Open the site's login page on the VM and return the detected field schema
 app.post('/api/connections/:id/open-login', async (req, res) => {
   const conn = connections.get(req.params.id);
   if (!conn) return res.status(404).json({ error: 'Connection not found.' });
   try {
     connections.setStatus(conn.id, 'authenticating');
-    const form = await siteAgent.detectLoginForm(conn);
+    const form = await siteAgent.detectLoginForm(conn); // navigates to the sign-in page
+    let step;
+    if (form && form.ok === false) step = { step: 'signup', ok: false, message: form.message, fields: [], ssoButtons: [], buttons: [], codesShown: [], messages: [] };
+    else step = await siteAgent.detectAuthStep(conn); // rich view of the current sign-in screen
     let screenshot = '';
     try { screenshot = await require('./vmShell').screenshotBase64(); } catch (_) {}
-    res.json({ ...form, screenshot });
+    res.json({ ok: step.step !== 'signup', ...step, screenshot });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -527,6 +547,32 @@ app.post('/api/connections/:id/login', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Re-read whatever auth step the site is currently showing (code, number, push…)
+app.post('/api/connections/:id/auth-step', async (req, res) => {
+  const conn = connections.get(req.params.id);
+  if (!conn) return res.status(404).json({ error: 'Connection not found.' });
+  try {
+    const step = await siteAgent.detectAuthStep(conn);
+    if (step.authenticated) connections.setStatus(conn.id, 'connected');
+    let screenshot = '';
+    try { screenshot = await require('./vmShell').screenshotBase64(); } catch (_) {}
+    res.json({ ...step, screenshot });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Click an auth action button (Verify / Resend / Approve) and re-read the step
+app.post('/api/connections/:id/auth-button', async (req, res) => {
+  const conn = connections.get(req.params.id);
+  if (!conn) return res.status(404).json({ error: 'Connection not found.' });
+  const { ref } = req.body || {};
+  if (!ref) return res.status(400).json({ error: 'ref required' });
+  try {
+    const step = await siteAgent.clickAuthButton(conn, ref);
+    if (step.authenticated) connections.setStatus(conn.id, 'connected');
+    res.json(step);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Verify the owner's session is live
@@ -578,9 +624,12 @@ async function restInvoke(req, res) {
   if (!conn) return res.status(404).json({ ok: false, error: 'Connection not found.' });
   const auth = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (!auth || auth !== conn.apiKey) return res.status(401).json({ ok: false, error: 'Invalid API key.' });
-  const { instruction, tool, arguments: toolArgs } = req.body || {};
+  const body = req.body || {};
+  // Accept common field names so any client snippet works: instruction/prompt/query/q/message/input/text
+  const instruction = body.instruction || body.prompt || body.query || body.q || body.message || body.input || body.text;
+  const tool = body.tool;
   const task = instruction || (tool && conn.tools.find((t) => t.name === tool)?.description);
-  if (!task) return res.status(400).json({ ok: false, error: 'Provide "instruction" or a known "tool".' });
+  if (!task) return res.status(400).json({ ok: false, error: 'Provide "instruction" (or "prompt") or a known "tool".' });
   try {
     const started = Date.now();
     const out = await siteAgent.runInstruction(conn, task);

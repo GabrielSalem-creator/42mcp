@@ -25,7 +25,7 @@ that read and act on that site. One active connection at a time; a new site repl
 - `npm run probe` / `npm run vm "<cmd>"` — inspect / run a shell command on the VM.
 - `npm run resize 4 16G` — change VM size. `npm run domain` — DNS records.
 
-## MCP server (for Cursor / agy / Claude clients)
+## MCP server (for MCP-compatible clients: Cursor, agy, and others)
 
 `.cursor/mcp.json` registers `boxd-vps` → `src/mcp/server.js`. Primary tool: **`vm_do`**
 (run the user's request on the VM). Per-connection remote MCP: `https://42mcp.tech/mcp/<id>`

@@ -29,9 +29,7 @@ module.exports = {
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean),
   cursorModel: process.env.CURSOR_MODEL || 'auto',
-  claudeModel: process.env.CLAUDE_MODEL || '',
   cursorBin: '/home/boxd/.local/bin/agent',
-  claudeBin: 'claude',
   agentWorkspace: '/home/boxd/agent-ws',
 
   // Artbloom (OpenAI-compatible) fallback LLM

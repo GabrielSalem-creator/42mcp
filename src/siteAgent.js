@@ -34,6 +34,14 @@ function parseSnapshot(text) {
   return els;
 }
 
+// Any alternative sign-in method a site might offer (never sign-up).
+const SIGNIN_METHOD = /(continue with|sign ?in with|log ?in with|with (google|apple|microsoft|facebook|github|x\b|twitter|linkedin|okta|slack|discord|email|phone)|single sign|\bsso\b|passkey|magic link|email link|use (phone|email|a code)|one-?time|login code|sign ?in to)/i;
+function isSignInMethod(name) {
+  const n = (name || '').toLowerCase();
+  if (/sign ?up|register|create (an )?account/.test(n)) return false; // never signup
+  return SIGNIN_METHOD.test(n);
+}
+
 function looksLikeSignup(elements, title) {
   const hay = (title + ' ' + elements.map((e) => e.name).join(' ')).toLowerCase();
   const signup = /(create account|create an account|sign ?up|register|join free|new to)/.test(hay);
@@ -91,6 +99,22 @@ async function detectLoginForm(conn) {
     if (hasPassword) { best = { url, title, els }; break; }
     if (!fallback && onLoginUrl && hasInput) fallback = { url, title, els };
   }
+  // Fallback: open the site and click its own "Log in / Sign in" link.
+  if (!best && !fallback) {
+    await vm.open(conn.url);
+    await vm.sleep(2000);
+    const els0 = parseSnapshot(await vm.snapshot());
+    const link = els0.find((e) => /link|button/.test(e.role) && /^(log ?in|sign ?in|login|account|my account)\b/i.test(e.name) && !/sign ?up|register|create/i.test(e.name));
+    if (link) {
+      await vm.agentBrowser(['click', '@' + link.ref], 15000);
+      await vm.sleep(2500);
+      const els1 = parseSnapshot(await vm.snapshot());
+      if (els1.some((e) => /textbox/.test(e.role))) {
+        best = { url: await vm.getUrl(), title: await vm.getTitle(), els: els1 };
+      }
+    }
+  }
+
   const chosen = best || fallback || { url: await vm.getUrl(), title: await vm.getTitle(), els: parseSnapshot(await vm.snapshot()) };
   const els = chosen.els;
   if (looksLikeSignup(els, chosen.title)) {
@@ -109,7 +133,7 @@ async function detectLoginForm(conn) {
       else if (/phone|mobile|sms/.test(n)) type = 'tel';
       else if (/user ?name|user id|login|account|identifier|handle/.test(n)) type = 'username';
       fields.push({ ref: e.ref, id, label: e.name || type, type, required: /required/i.test(e.attrs) });
-    } else if (/button|link/.test(e.role) && /with\s+(google|apple|microsoft|facebook|github|passkey|sso|email link)/i.test(n)) {
+    } else if (/button|link/.test(e.role) && isSignInMethod(n)) {
       ssoButtons.push({ ref: e.ref, label: e.name });
     }
   }
@@ -126,6 +150,90 @@ async function detectLoginForm(conn) {
   };
 }
 
+/** Pull visible instruction text + any displayed codes from a full snapshot. */
+function extractAuthText(snap) {
+  const messages = [];
+  const codes = [];
+  for (const line of String(snap || '').split('\n')) {
+    const m = line.match(/^\s*-\s+(heading|StaticText|paragraph|text|strong)\s+"((?:[^"\\]|\\.)+)"/);
+    if (!m) continue;
+    const t = m[2].trim();
+    if (t.length < 2 || t.length > 200) continue;
+    if (/(verify|verification|confirm|code|sent|enter the|authenticat|two-factor|2fa|one-?time|security|device|approve|tap the|select the|number|check your|we('| )?ve sent|passkey|recovery|can't access|didn'?t get)/i.test(t)) {
+      if (!messages.includes(t)) messages.push(t);
+    }
+    // a prominent short number the site shows to match on a device (e.g. GitHub mobile)
+    const numMatch = t.match(/\b(\d{2,3})\b/);
+    if (numMatch && /(number|tap|select|confirm|match|shown|enter this)/i.test(t)) {
+      if (!codes.includes(numMatch[1])) codes.push(numMatch[1]);
+    }
+  }
+  return { messages: messages.slice(0, 5), codes: codes.slice(0, 2) };
+}
+
+/**
+ * Read whatever auth step the site is CURRENTLY showing and describe it for the
+ * chat: step type, the site's own instruction text, any number it displays to
+ * match on a device, the exact input(s) to fill, and the action buttons.
+ */
+async function detectAuthStep(conn) {
+  const url = await vm.getUrl();
+  const title = await vm.getTitle();
+  const interactive = await vm.snapshot({ interactive: true });
+  const full = await vm.snapshot({ interactive: false, compact: true });
+  const els = parseSnapshot(interactive);
+  const { messages, codes } = extractAuthText(full);
+
+  if (isAuthenticated(els, url, title)) {
+    return { step: 'done', authenticated: true, url, title, messages, fields: [], buttons: [], codesShown: [] };
+  }
+  if (looksLikeSignup(els, title)) {
+    return { step: 'signup', authenticated: false, message: 'This looks like a sign-up page; this tool only signs in.', fields: [], buttons: [], codesShown: codes };
+  }
+
+  const fields = [];
+  const sso = [];
+  for (const e of els) {
+    const n = e.name.toLowerCase();
+    if (/textbox|combobox/.test(e.role)) {
+      let type = 'text';
+      if (/verification|security|confirmation|one.?time|2fa|two.?factor|\bcode\b|passcode|digit|authenticator|token/.test(n)) type = 'otp';
+      else if (/password|passcode|\bpin\b/.test(n)) type = 'password';
+      else if (/e-?mail|courriel/.test(n)) type = 'email';
+      else if (/phone|mobile|sms/.test(n)) type = 'tel';
+      else if (/user ?name|user id|login|account|identifier|handle/.test(n)) type = 'username';
+      fields.push({ ref: e.ref, id: e.ref, label: e.name || type, type, required: /required/i.test(e.attrs) });
+    } else if (/button|link/.test(e.role) && isSignInMethod(n)) {
+      sso.push({ ref: e.ref, label: e.name });
+    }
+  }
+  const actionButtons = els
+    .filter((e) => /button/.test(e.role) && /^(verify|confirm|continue|next|submit|log ?in|sign ?in|resend|send code|try another|use a|approve)/i.test(e.name))
+    .map((e) => ({ ref: e.ref, label: e.name }));
+
+  const hasPassword = fields.some((f) => f.type === 'password');
+  const hasOtp = fields.some((f) => f.type === 'otp');
+  const pushLike = !fields.length && (codes.length > 0 || /(check your|approve|open the|tap the|we('| )?ve sent|notification|authenticator app|confirm it'?s you)/i.test(messages.join(' ')));
+
+  let step = 'other';
+  if (hasPassword) step = 'credentials';
+  else if (hasOtp) step = 'code';
+  else if (pushLike) step = 'push';
+  else if (fields.length) step = 'input';
+
+  return {
+    step,
+    authenticated: false,
+    url, title,
+    messages,
+    codesShown: codes,
+    fields,
+    ssoButtons: sso,
+    buttons: actionButtons,
+    hasPassword, hasOtp
+  };
+}
+
 /** Type the owner's own values into the detected fields and submit. Not stored. */
 async function fillLogin(conn, values = {}, submit = true) {
   const form = await detectLoginForm(conn);
@@ -137,17 +245,18 @@ async function fillLogin(conn, values = {}, submit = true) {
   }
   if (submit && form.submitRef) {
     await vm.agentBrowser(['click', '@' + form.submitRef], 15000);
-    await vm.sleep(3000);
+    await vm.sleep(3500);
   }
-  const [url, title, snap] = await Promise.all([vm.getUrl(), vm.getTitle(), vm.snapshot()]);
-  const els = parseSnapshot(snap);
-  return {
-    ok: true,
-    submitted: Boolean(submit && form.submitRef),
-    authenticated: isAuthenticated(els, url, title),
-    needsOtp: els.some((e) => /verification|security|code|2fa|two.?factor|digit/i.test(e.name)),
-    url, title
-  };
+  // Report whatever the site shows next (code input, number to match, push, etc.)
+  const next = await detectAuthStep(conn);
+  return { ok: true, submitted: Boolean(submit && form.submitRef), ...next, needsOtp: next.step === 'code' };
+}
+
+/** Click a named auth action (Verify / Resend / Approve) by ref, then re-read the step. */
+async function clickAuthButton(conn, ref) {
+  await vm.agentBrowser(['click', '@' + String(ref).replace(/[^a-zA-Z0-9]/g, '')], 15000);
+  await vm.sleep(3000);
+  return detectAuthStep(conn);
 }
 
 // ---------- instruction execution (LLM action loop over agent-browser) ----------
@@ -272,6 +381,8 @@ async function runInstruction(conn, instruction, { maxSteps = 12 } = {}) {
 module.exports = {
   verifySession,
   detectLoginForm,
+  detectAuthStep,
+  clickAuthButton,
   fillLogin,
   runInstruction,
   parseSnapshot,
