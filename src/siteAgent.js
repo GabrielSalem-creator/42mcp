@@ -593,7 +593,7 @@ const CLI_CONTROL_PROMPT = (domain) => `You control a logged-in Chrome browser t
 {"action":"finish","result":<the answer as JSON>,"risk":"read|write"}
 Rules: refs (eN) come ONLY from the CURRENT PAGE shown. Use the fewest steps. Do not sign up or change account settings. For state-changing actions (send/post/delete/buy) set risk "write". When you have the answer, finish with the full result as structured JSON. Be concise.`;
 
-/** Claude (or configured CLI) drives the browser step by step. */
+/** The configured reasoning CLI drives the browser step by step. */
 async function runInstructionWithCli(conn, instruction, { maxSteps = 10 } = {}) {
   await vm.open(conn.url); await vm.sleep(1500);
   const sys = CLI_CONTROL_PROMPT(conn.domain);
@@ -629,7 +629,7 @@ async function runInstruction(conn, instruction, { maxSteps = 12 } = {}) {
       if (ig) return ig;
     } catch (_) { /* fall through to generic */ }
   }
-  // Prefer the local reasoning CLI (Claude) as the browser controller when configured.
+  // Prefer the configured local reasoning CLI as the browser controller.
   if (config.analysisCliBin) {
     try {
       const out = await runInstructionWithCli(conn, instruction, { maxSteps: 10 });
