@@ -278,7 +278,7 @@ Return STRICT JSON ONLY — no markdown, no commentary:
 {"authenticated":bool,"signup":bool,"step":"credentials|code|push|captcha|input|done","instruction":"...","fields":[{"ref":"e#","label":"...","type":"username|email|password|otp|tel|text"}],"buttons":[{"ref":"e#","label":"..."}],"methods":[{"ref":"e#","label":"..."}],"codesShown":["..."]}`;
 
 async function analyzeAuthWithLLM(snapshot, url, title) {
-  const user = `URL: ${url}\nPAGE TITLE: ${title}\n\nACCESSIBILITY TREE (the current page):\n${String(snapshot).slice(0, 6500)}`;
+  const user = `URL: ${url}\nPAGE TITLE: ${title}\n\nACCESSIBILITY TREE (the current page):\n${String(snapshot).slice(0, 3500)}`;
   const out = await analysisComplete(AUTH_ANALYSIS_PROMPT, user, 30000, 700);
   const m = out.match(/\{[\s\S]*\}/);
   if (!m) return null;
@@ -420,7 +420,7 @@ async function openLoginAndAnalyze(conn) {
   let last = null;
   for (const u of tries) {
     if (seen.has(u)) continue; seen.add(u);
-    await vm.open(u); await vm.sleep(1800);
+    await vm.open(u); await vm.sleep(1200);
     const step = await detectAuthStep(conn);
     last = step;
     const usable = step.authenticated || step.step === 'signup' ||
@@ -576,7 +576,7 @@ async function runAction(a) {
 }
 
 function trimmed(snap) {
-  return String(snap || '').split('\n').slice(0, 120).join('\n').slice(0, 6000);
+  return String(snap || '').split('\n').slice(0, 90).join('\n').slice(0, 4000);
 }
 
 async function artbloomChat(messages, tools) {
@@ -623,28 +623,38 @@ const CLI_CONTROL_PROMPT = (domain) => `You control a logged-in Chrome browser t
 {"action":"finish","result":<the answer as JSON>,"risk":"read|write"}
 Rules: refs (eN) come ONLY from the CURRENT PAGE shown. Use the fewest steps. Do not sign up or change account settings. For state-changing actions (send/post/delete/buy) set risk "write". When you have the answer, finish with the full result as structured JSON. Be concise.`;
 
-/** The configured reasoning CLI drives the browser step by step. */
-async function runInstructionWithCli(conn, instruction, { maxSteps = 10 } = {}) {
-  await vm.open(conn.url); await vm.sleep(1500);
+function taskKey(instruction) { return String(instruction).toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 120); }
+
+/** The configured reasoning CLI drives the browser step by step. Learns & reuses a methodology. */
+async function runInstructionWithCli(conn, instruction, { maxSteps = 8 } = {}) {
+  const key = taskKey(instruction);
+  const wf = connections.getWorkflow(conn.id, key); // learned recipe: { navs:[urls], lastUrl }
+  await vm.open((wf && wf.lastUrl) || conn.url);     // jump straight to where it worked last time
+  await vm.sleep(1100);
   const sys = CLI_CONTROL_PROMPT(conn.domain);
   const steps = [];
+  const navs = [];
   let last = '';
   for (let i = 0; i < maxSteps; i++) {
     const page = trimmed(await vm.snapshot());
     const prompt = `${sys}\n\nTASK: ${instruction}\nSTEP ${i + 1}${last ? ` (last: ${last})` : ''}\nCURRENT PAGE:\n${page}\n\nNext action JSON:`;
     let out;
-    try { out = await cliComplete(prompt, 35000); }
+    try { out = await cliComplete(prompt, 30000); }
     catch (e) { return { ok: false, error: 'controller error: ' + e.message, steps }; }
     const m = out.match(/\{[\s\S]*\}/);
     if (!m) { last = 'no action parsed'; continue; }
     let a;
     try { a = JSON.parse(m[0]); } catch (_) { last = 'bad json'; continue; }
     if (a.action === 'finish' || a.done || a.result !== undefined) {
+      // Remember the methodology: the page the answer came from, to jump there next time.
+      const lastUrl = await vm.getUrl().catch(() => '');
+      connections.saveWorkflow(conn.id, key, { navs, lastUrl });
       connections.recordRun(conn.id, { instruction, risk: a.risk || 'read', steps: steps.length });
       return { ok: true, result: a.result ?? a.text ?? 'Done.', risk: a.risk || 'read', steps };
     }
     try { await runAction({ action: a.action, url: a.url, ref: a.ref, text: a.text, key: a.key, direction: a.direction || a.dir }); }
     catch (e) { last = 'error: ' + e.message; continue; }
+    if (a.action === 'navigate' && a.url) navs.push(a.url);
     steps.push({ action: a.action, ref: a.ref, url: a.url });
     last = a.action + (a.ref ? ' @' + a.ref : '') + (a.url ? ' ' + a.url : '');
   }
