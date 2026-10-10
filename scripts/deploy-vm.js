@@ -100,6 +100,7 @@ async function startService() {
     'User=boxd',
     `WorkingDirectory=${REMOTE}`,
     'Environment=DISPLAY=:100',
+    'Environment=AGENT_BROWSER_PROFILE=/home/boxd/.config/chrome-agent-profile',
     `ExecStartPre=/bin/bash -lc 'systemctl is-active --quiet boxd-desktop.service || sudo systemctl start boxd-desktop.service || true'`,
     `ExecStart=/usr/local/bin/node ${REMOTE}/src/server.js`,
     'Restart=always',
