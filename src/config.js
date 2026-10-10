@@ -33,6 +33,8 @@ module.exports = {
   agentWorkspace: '/home/boxd/agent-ws',
   // Optional local reasoning CLI for page analysis (set ANALYSIS_CLI in .env). Empty = use hosted model only.
   analysisCliBin: process.env.ANALYSIS_CLI || '',
+  // 'fast' (hosted function-calling model, default) or 'cli' (local reasoning CLI, slower/higher quality).
+  instructionBrain: process.env.INSTRUCTION_BRAIN || 'fast',
 
   // Artbloom (OpenAI-compatible) fallback LLM
   artbloomApiKey: process.env.ARTBLOOM_API_KEY || '',

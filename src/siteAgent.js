@@ -661,7 +661,7 @@ async function runInstructionWithCli(conn, instruction, { maxSteps = 8 } = {}) {
   return { ok: true, result: 'Reached step limit.', risk: 'read', steps, partial: true };
 }
 
-async function runInstruction(conn, instruction, { maxSteps = 12 } = {}) {
+async function runInstruction(conn, instruction, { maxSteps = 6 } = {}) {
   // Instagram → dedicated DOM extractor (real post/story URLs, fast).
   if (/instagram\.com/i.test(conn.domain)) {
     try {
@@ -669,18 +669,22 @@ async function runInstruction(conn, instruction, { maxSteps = 12 } = {}) {
       if (ig) return ig;
     } catch (_) { /* fall through to generic */ }
   }
-  // Prefer the configured local reasoning CLI as the browser controller.
-  if (config.analysisCliBin) {
+  // Fast general loop uses the hosted function-calling model (~3s/call). The slower
+  // reasoning CLI is opt-in via INSTRUCTION_BRAIN=cli for maximum quality.
+  if (config.instructionBrain === 'cli' && config.analysisCliBin) {
     try {
-      const out = await runInstructionWithCli(conn, instruction, { maxSteps: 10 });
+      const out = await runInstructionWithCli(conn, instruction, { maxSteps: 8 });
       if (out && (out.ok || out.error)) return out;
-    } catch (_) { /* fall back to hosted model loop */ }
+    } catch (_) { /* fall back */ }
   }
   if (!config.artbloomApiKey) {
-    return { ok: false, error: 'No planner LLM configured.' };
+    return { ok: false, error: 'No planner model configured.' };
   }
-  await vm.open(conn.url);
-  await vm.sleep(1500);
+  // Methodology cache: jump to the page that worked last time.
+  const key = taskKey(instruction);
+  const wf = connections.getWorkflow(conn.id, key);
+  await vm.open((wf && wf.lastUrl) || conn.url);
+  await vm.sleep(1100);
 
   const messages = [
     { role: 'system', content: SYSTEM(conn) },
@@ -705,6 +709,8 @@ async function runInstruction(conn, instruction, { maxSteps = 12 } = {}) {
       if (args.action === 'finish' || args.action === 'extract') {
         const result = args.result ?? (msg.content || '').trim();
         const risk = args.risk || 'read';
+        const lastUrl = await vm.getUrl().catch(() => '');
+        connections.saveWorkflow(conn.id, key, { lastUrl });
         connections.recordRun(conn.id, { instruction, risk, steps: stepLog.length });
         return { ok: true, result, risk, steps: stepLog };
       }
