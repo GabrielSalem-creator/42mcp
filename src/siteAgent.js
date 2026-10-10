@@ -603,10 +603,11 @@ Goal: carry out the user's instruction and return clean structured JSON.
 Rules:
 - Use the "browser" tool for every step: navigate, snapshot (to see refs like e12), click, fill, press, scroll, read, extract, finish.
 - Refs come only from the latest snapshot and go stale after any change — re-snapshot after navigation/clicks.
-- This is login-only automation of the user's OWN account. Never register, create accounts, or change passwords/security settings.
-- Prefer reading data. If the instruction requires a state-changing action (send, post, delete, buy), set risk:"write" and stop at finish with a clear summary instead of performing it unless the instruction clearly authorizes that exact action.
-- When done, call browser with action:"finish", put the answer in "result" as JSON, and set "risk".
-- Keep to at most 12 steps.`;
+- IMPORTANT: if the current page is a sign-in / log-in page (password or "Sign in" form, or the URL contains login/signin), you are NOT logged in. Immediately call finish with result {"error":"not_logged_in"} and risk "read". Do NOT try to log in or fill credentials.
+- This is read/act automation of the user's OWN already-signed-in account. Never register or change security settings.
+- Prefer reading data. If the instruction requires a state-changing action (send, post, delete, buy), set risk:"write" and finish with a clear summary instead of performing it unless clearly authorized.
+- Work in as few steps as possible. When done, call finish with the answer in "result" as JSON and set "risk".
+- Hard limit: 6 steps.`;
 
 /**
  * Run a natural-language instruction against the connection. Returns
@@ -686,10 +687,20 @@ async function runInstruction(conn, instruction, { maxSteps = 6 } = {}) {
   await vm.open((wf && wf.lastUrl) || conn.url);
   await vm.sleep(1100);
 
+  // Fast guard: if the site bounced us to a login page, don't flail — say so instantly.
+  const firstSnap = await vm.snapshot();
+  const gEls = parseSnapshot(firstSnap);
+  const curUrl = (await vm.getUrl()) || '';
+  const onLogin = /\/(login|signin|sign_in|sign-in|auth|accounts\/login|session\/new)/i.test(curUrl)
+    || gEls.some((e) => /textbox/.test(e.role) && /password/i.test(e.name));
+  if (onLogin) {
+    return { ok: false, error: `${conn.domain} is not signed in on this connection. Open ${conn.domain} in the chat at www.42mcp.tech and sign in once, then run this again.` };
+  }
+
   const messages = [
     { role: 'system', content: SYSTEM(conn) },
     { role: 'user', content: instruction },
-    { role: 'user', content: 'Current page snapshot:\n' + trimmed(await vm.snapshot()) }
+    { role: 'user', content: 'Current page snapshot:\n' + trimmed(firstSnap) }
   ];
 
   const stepLog = [];
