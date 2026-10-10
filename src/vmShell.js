@@ -85,6 +85,12 @@ async function open(url) {
   return agentBrowser(['open', url], 60000);
 }
 
+/** Close every browser tab/session for a clean slate (logins persist on the profile). */
+async function closeAll() {
+  try { await agentBrowser(['close', '--all'], 20000); } catch (_) {}
+  await sleep(600);
+}
+
 async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -101,5 +107,6 @@ module.exports = {
   getScreen,
   cookiesJson,
   open,
+  closeAll,
   sleep
 };

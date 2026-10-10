@@ -483,6 +483,17 @@ app.get('/api/connections', (req, res) => {
   });
 });
 
+// Fresh start: close all browser tabs/sessions (logins persist), optionally drop connections
+app.post('/api/browser/reset', async (req, res) => {
+  try {
+    await require('./vmShell').closeAll();
+    if (req.body && req.body.clearConnections) {
+      for (const c of connections.list()) connections.remove(c.id);
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+});
+
 // Resolve a free-text request ("connect my instagram") to a website URL
 app.post('/api/resolve-site', async (req, res) => {
   const { text } = req.body || {};

@@ -229,6 +229,8 @@ async function startSite(raw) {
   if (!url) { addAI("Type a single website address, like <b>instagram.com</b> (no spaces)."); return; }
   setBusy(true); addTyping();
   try {
+    // Fresh browser for a clean connect (logins persist on the profile).
+    try { await api('/api/browser/reset', { method: 'POST', body: '{}' }); } catch (_) {}
     const d = await api('/api/connections', { method: 'POST', body: JSON.stringify({ url }) });
     state.conn = d.connection; state.integration = d.integration;
     removeTyping();
@@ -236,6 +238,7 @@ async function startSite(raw) {
     addTyping();
     const v = await api(`/api/connections/${state.conn.id}/verify`, { method: 'POST', body: '{}' });
     removeTyping();
+    if (!state.conn) return;
     if (v.authenticated) {
       state.conn.status = 'connected'; state.mode = 'ready';
       addAI(`You're already signed in to <b>${esc(state.conn.domain)}</b>. 🎉`);
@@ -386,6 +389,7 @@ async function ssoClick(ref) {
 }
 
 function onConnected() {
+  if (!state.conn) return;
   state.conn.status = 'connected'; state.mode = 'ready';
   stopLive();
   addAI(`Signed in to <b>${esc(state.conn.domain)}</b>. 🎉`);
@@ -460,9 +464,11 @@ async function runInstruction(text) {
 
 /* ---------------- new connection ---------------- */
 async function newConnection() {
-  stopLive();
-  if (state.conn) { try { await api(`/api/connections/${state.conn.id}`, { method: 'DELETE' }); } catch (_) {} }
-  state.conn = null; state.integration = null;
+  stopLive(); stopPushPoll();
+  state.conn = null; state.integration = null; state.mode = 'ask_site';
+  log().innerHTML = '';
+  const b = addAI('Starting fresh — closing everything and resetting the browser…');
+  try { await api('/api/browser/reset', { method: 'POST', body: '{}' }); } catch (_) {}
   log().innerHTML = '';
   greet();
 }
